@@ -6,8 +6,8 @@ from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                             QProgressBar, QFileDialog, QCheckBox, QRadioButton, 
-                            QGroupBox)
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings, QTimer
+                            QGroupBox, QComboBox)
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings, QSize
 from PyQt6.QtGui import QIcon, QPixmap, QCursor
 from GetMetadata import get_metadata
 from LucidaDownloader import TrackDownloader
@@ -29,11 +29,11 @@ class MetadataFetcher(QThread):
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
     
-    def __init__(self, url, headless=True, use_fallback=False):
+    def __init__(self, url, headless=True, service="tidal"):
         super().__init__()
         self.url = url
         self.headless_mode = headless
-        self.use_fallback = use_fallback
+        self.service = service
         self.max_retries = 3
 
     def extract_track_id(self, url):
@@ -47,8 +47,7 @@ class MetadataFetcher(QThread):
         
         for attempt in range(self.max_retries):
             try:
-                platform = "amazon" if self.use_fallback else "tidal"
-                lucida_url = f"https://lucida.to/?url=https%3A%2F%2Fopen.spotify.com%2Ftrack%2F{track_id}&country=auto&to={platform}"
+                lucida_url = f"https://lucida.to/?url=https%3A%2F%2Fopen.spotify.com%2Ftrack%2F{track_id}&country=auto&to={self.service}"
                 browser = await zd.start(headless=self.headless_mode)
                 try:
                     page = await browser.get(lucida_url)
@@ -106,11 +105,10 @@ class DownloaderWorker(QThread):
         
     def progress_callback(self, downloaded_size, total_size):
         current_time = time.time()
-        if current_time - self.last_update_time >= 0.5:  # Update every 0.5 seconds
+        if current_time - self.last_update_time >= 0.5:
             progress = int((downloaded_size / total_size) * 100) if total_size > 0 else 0
             self.progress.emit(progress)
             
-            # Calculate speed
             time_diff = current_time - self.last_update_time
             if time_diff > 0:
                 speed = (downloaded_size - self.last_downloaded_size) / time_diff
@@ -131,6 +129,38 @@ class DownloaderWorker(QThread):
             self.finished.emit("Download complete!")
         except Exception as e:
             self.error.emit(f"Error: {str(e)}")
+
+class ServiceComboBox(QComboBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setIconSize(QSize(16, 16))
+        self.setup_items()
+        
+    def setup_items(self):
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        icons_dir = os.path.join(current_dir, 'icons')
+        
+        if not os.path.exists(icons_dir):
+            os.makedirs(icons_dir)
+            
+        services = [
+            {'id': 'tidal', 'name': 'Tidal', 'icon': 'tidal.png'},
+            {'id': 'amazon', 'name': 'Amazon Music', 'icon': 'amazon.png'},
+            {'id': 'qobuz', 'name': 'Qobuz', 'icon': 'qobuz.png'}
+        ]
+        
+        for service in services:
+            icon_path = os.path.join(icons_dir, service['icon'])
+            if not os.path.exists(icon_path):
+                self.create_placeholder_icon(icon_path)
+            
+            icon = QIcon(icon_path)
+            self.addItem(icon, service['name'], service['id'])
+    
+    def create_placeholder_icon(self, path):
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        pixmap.save(path)
 
 class SpotifyFlacGUI(QMainWindow):
     def __init__(self):
@@ -157,11 +187,17 @@ class SpotifyFlacGUI(QMainWindow):
         
     def load_settings(self):
         headless = self.settings.value('headless', True, type=bool)
-        fallback = self.settings.value('fallback', False, type=bool)
+        service = self.settings.value('service', 'tidal')
         format_type = self.settings.value('format', 'title_artist')
         output_dir = self.settings.value('output_dir', self.default_music_dir)
+        
         self.headless_checkbox.setChecked(headless)
-        self.fallback_checkbox.setChecked(fallback)
+        
+        for i in range(self.service_combo.count()):
+            if self.service_combo.itemData(i) == service:
+                self.service_combo.setCurrentIndex(i)
+                break
+                
         self.format_title_artist.setChecked(format_type == 'title_artist')
         self.format_artist_title.setChecked(format_type == 'artist_title')
         self.dir_input.setText(output_dir)
@@ -169,8 +205,8 @@ class SpotifyFlacGUI(QMainWindow):
     def setup_settings_persistence(self):
         self.headless_checkbox.stateChanged.connect(
             lambda x: self.settings.setValue('headless', bool(x)))
-        self.fallback_checkbox.stateChanged.connect(
-            lambda x: self.settings.setValue('fallback', bool(x)))
+        self.service_combo.currentIndexChanged.connect(
+            lambda i: self.settings.setValue('service', self.service_combo.itemData(i)))
         self.format_title_artist.toggled.connect(
             lambda x: self.settings.setValue('format', 'title_artist' if x else 'artist_title'))
         self.dir_input.textChanged.connect(
@@ -218,29 +254,38 @@ class SpotifyFlacGUI(QMainWindow):
         settings_group = QGroupBox("Settings")
         settings_layout = QHBoxLayout(settings_group)
         settings_layout.setContentsMargins(10, 0, 10, 10)
-        settings_layout.setSpacing(20)
+        settings_layout.setSpacing(15)
         
         settings_container = QWidget()
         settings_container_layout = QHBoxLayout(settings_container)
         settings_container_layout.setContentsMargins(0, 0, 0, 0)
-        settings_container_layout.setSpacing(20)
+        settings_container_layout.setSpacing(15)
         
         self.headless_checkbox = QCheckBox("Headless")
         self.headless_checkbox.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.headless_checkbox.setChecked(True)
         settings_container_layout.addWidget(self.headless_checkbox)
         
-        self.fallback_checkbox = QCheckBox("Fallback")
-        self.fallback_checkbox.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.fallback_checkbox.setChecked(False)
-        settings_container_layout.addWidget(self.fallback_checkbox)
+        service_widget = QWidget()
+        service_layout = QHBoxLayout(service_widget)
+        service_layout.setContentsMargins(0, 0, 0, 0)
+        service_layout.setSpacing(10)
+        
+        service_label = QLabel("Service:")
+        self.service_combo = ServiceComboBox()
+        self.service_combo.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        
+        service_layout.addWidget(service_label)
+        service_layout.addWidget(self.service_combo)
+        
+        settings_container_layout.addWidget(service_widget)
         
         format_widget = QWidget()
         format_layout = QHBoxLayout(format_widget)
         format_layout.setContentsMargins(0, 0, 0, 0)
-        format_layout.setSpacing(15)
+        format_layout.setSpacing(10)
         
-        format_label = QLabel("Filename Format:")
+        format_label = QLabel("Filename:")
         self.format_title_artist = QRadioButton("Title - Artist")
         self.format_artist_title = QRadioButton("Artist - Title")
         self.format_title_artist.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -361,8 +406,8 @@ class SpotifyFlacGUI(QMainWindow):
         self.fetch_button.setEnabled(False)
         self.status_label.setText("Fetching track information...")
         headless = self.headless_checkbox.isChecked()
-        use_fallback = self.fallback_checkbox.isChecked()
-        self.fetcher = MetadataFetcher(url, headless=headless, use_fallback=use_fallback)
+        service = self.service_combo.currentData()
+        self.fetcher = MetadataFetcher(url, headless=headless, service=service)
         self.fetcher.finished.connect(self.handle_track_info)
         self.fetcher.error.connect(self.handle_fetch_error)
         self.fetcher.start()
