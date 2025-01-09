@@ -14,9 +14,9 @@ async def get_metadata(page, headless=True):
             const [url, config] = args;
             if (url.includes('/api/load?url=%2Fapi%2Ffetch%2Fstream%2Fv2')) {
                 const payload = JSON.parse(config.body);
-                const title = document.querySelector('h1.svelte-6pt9ji').textContent;
+                const title = document.querySelector('h1.svelte-6pt9ji').textContent.trim();
                 const artists = Array.from(document.querySelectorAll('h2.svelte-6pt9ji a.normal'))
-                                .map(a => a.textContent)
+                                .map(a => a.textContent.trim())
                                 .join(', ');
                 const cover = document.querySelector('.svelte-6pt9ji .meta.svelte-6pt9ji a').href;
                                 
