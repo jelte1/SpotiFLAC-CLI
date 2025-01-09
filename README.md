@@ -1,18 +1,17 @@
 [![GitHub All Releases](https://img.shields.io/github/downloads/afkarxyz/SpotifyFLAC/total?style=for-the-badge)](https://github.com/afkarxyz/SpotifyFLAC/releases)
 
-**Spotify FLAC** allows you to download Spotify tracks in true, lossless FLAC format, providing the highest audio quality for an exceptional listening experience.
+**Spotify FLAC** allows you to download Spotify tracks in true FLAC format using services like Tidal, Qobuz, and Amazon Music with the help of Lucida.
 
 > [!NOTE]  
 > Requires **Google Chrome**
 
-#### [Download](https://github.com/afkarxyz/SpotifyFLAC/releases/download/v1.1/SpotifyFLAC.exe) Spotify FLAC
+#### [Download](https://github.com/afkarxyz/SpotifyFLAC/releases/download/v1.2/SpotifyFLAC.exe) Spotify FLAC
 
 ## Screenshots
 
-![image](https://github.com/user-attachments/assets/47d9af02-db9b-4e3c-ac77-f5a5c4b54afe)
+![image](https://github.com/user-attachments/assets/abcb01f3-ff3e-4496-afec-df720553a189)
 
-> - When **Headless** is enabled, the browser runs in the background without a graphical interface, improving performance and allowing seamless automation.
-> - When **Fallback** is enabled, it will use another server.
+> When **Headless** is enabled, the browser runs in the background without a graphical interface, improving performance and allowing seamless automation.
 
 ![image](https://github.com/user-attachments/assets/75a61cef-05a8-4f2c-b40b-ba5d49885ffe)
 
