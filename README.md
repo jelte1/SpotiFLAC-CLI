@@ -5,6 +5,9 @@
 > [!NOTE]  
 > Requires **Google Chrome**
 
+> [!WARNING] 
+Sometimes, the **download speed** from Lucida can be fast or slow; it varies unpredictably.
+
 #### [Download](https://github.com/afkarxyz/SpotifyFLAC/releases/download/v1.2/SpotifyFLAC.exe) Spotify FLAC
 
 ## Screenshots
