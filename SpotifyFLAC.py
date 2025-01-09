@@ -29,11 +29,12 @@ class MetadataFetcher(QThread):
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
     
-    def __init__(self, url, headless=True, service="tidal"):
+    def __init__(self, url, headless=True, service="tidal", use_fallback=False):
         super().__init__()
         self.url = url
         self.headless_mode = headless
         self.service = service
+        self.use_fallback = use_fallback
         self.max_retries = 3
 
     def extract_track_id(self, url):
@@ -45,9 +46,11 @@ class MetadataFetcher(QThread):
         import zendriver as zd
         from asyncio import sleep
         
+        domain = "lucida.su" if self.use_fallback else "lucida.to"
+        
         for attempt in range(self.max_retries):
             try:
-                lucida_url = f"https://lucida.to/?url=https%3A%2F%2Fopen.spotify.com%2Ftrack%2F{track_id}&country=auto&to={self.service}"
+                lucida_url = f"https://{domain}/?url=https%3A%2F%2Fopen.spotify.com%2Ftrack%2F{track_id}&country=auto&to={self.service}"
                 browser = await zd.start(headless=self.headless_mode)
                 try:
                     page = await browser.get(lucida_url)
@@ -88,12 +91,13 @@ class DownloaderWorker(QThread):
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
     
-    def __init__(self, metadata, output_dir, filename_format='title_artist'):
+    def __init__(self, metadata, output_dir, filename_format='title_artist', use_fallback=False):
         super().__init__()
         self.metadata = metadata
         self.output_dir = output_dir
         self.filename_format = filename_format
-        self.downloader = TrackDownloader()
+        self.use_fallback = use_fallback
+        self.downloader = TrackDownloader(use_fallback=use_fallback)
         self.last_update_time = 0
         self.last_downloaded_size = 0
         
@@ -146,7 +150,8 @@ class ServiceComboBox(QComboBox):
         services = [
             {'id': 'tidal', 'name': 'Tidal', 'icon': 'tidal.png'},
             {'id': 'amazon', 'name': 'Amazon Music', 'icon': 'amazon.png'},
-            {'id': 'qobuz', 'name': 'Qobuz', 'icon': 'qobuz.png'}
+            {'id': 'qobuz', 'name': 'Qobuz', 'icon': 'qobuz.png'},
+            {'id': 'deezer', 'name': 'Deezer', 'icon': 'deezer.png'}
         ]
         
         for service in services:
@@ -187,11 +192,13 @@ class SpotifyFlacGUI(QMainWindow):
         
     def load_settings(self):
         headless = self.settings.value('headless', True, type=bool)
+        fallback = self.settings.value('fallback', False, type=bool)
         service = self.settings.value('service', 'tidal')
         format_type = self.settings.value('format', 'title_artist')
         output_dir = self.settings.value('output_dir', self.default_music_dir)
         
         self.headless_checkbox.setChecked(headless)
+        self.fallback_checkbox.setChecked(fallback)
         
         for i in range(self.service_combo.count()):
             if self.service_combo.itemData(i) == service:
@@ -205,6 +212,8 @@ class SpotifyFlacGUI(QMainWindow):
     def setup_settings_persistence(self):
         self.headless_checkbox.stateChanged.connect(
             lambda x: self.settings.setValue('headless', bool(x)))
+        self.fallback_checkbox.stateChanged.connect(
+            lambda x: self.settings.setValue('fallback', bool(x)))
         self.service_combo.currentIndexChanged.connect(
             lambda i: self.settings.setValue('service', self.service_combo.itemData(i)))
         self.format_title_artist.toggled.connect(
@@ -254,17 +263,22 @@ class SpotifyFlacGUI(QMainWindow):
         settings_group = QGroupBox("Settings")
         settings_layout = QHBoxLayout(settings_group)
         settings_layout.setContentsMargins(10, 0, 10, 10)
-        settings_layout.setSpacing(15)
+        settings_layout.setSpacing(10)
         
         settings_container = QWidget()
         settings_container_layout = QHBoxLayout(settings_container)
         settings_container_layout.setContentsMargins(0, 0, 0, 0)
-        settings_container_layout.setSpacing(15)
+        settings_container_layout.setSpacing(10)
         
         self.headless_checkbox = QCheckBox("Headless")
         self.headless_checkbox.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.headless_checkbox.setChecked(True)
         settings_container_layout.addWidget(self.headless_checkbox)
+        
+        self.fallback_checkbox = QCheckBox("Fallback")
+        self.fallback_checkbox.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.fallback_checkbox.setChecked(False)
+        settings_container_layout.addWidget(self.fallback_checkbox)
         
         service_widget = QWidget()
         service_layout = QHBoxLayout(service_widget)
@@ -286,8 +300,8 @@ class SpotifyFlacGUI(QMainWindow):
         format_layout.setSpacing(10)
         
         format_label = QLabel("Filename:")
-        self.format_title_artist = QRadioButton("Title - Artist")
-        self.format_artist_title = QRadioButton("Artist - Title")
+        self.format_title_artist = QRadioButton("Title")
+        self.format_artist_title = QRadioButton("Artist")
         self.format_title_artist.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.format_artist_title.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.format_title_artist.setChecked(True)
@@ -406,8 +420,9 @@ class SpotifyFlacGUI(QMainWindow):
         self.fetch_button.setEnabled(False)
         self.status_label.setText("Fetching track information...")
         headless = self.headless_checkbox.isChecked()
+        fallback = self.fallback_checkbox.isChecked()
         service = self.service_combo.currentData()
-        self.fetcher = MetadataFetcher(url, headless=headless, service=service)
+        self.fetcher = MetadataFetcher(url, headless=headless, service=service, use_fallback=fallback)
         self.fetcher.finished.connect(self.handle_track_info)
         self.fetcher.error.connect(self.handle_fetch_error)
         self.fetcher.start()
@@ -502,10 +517,13 @@ class SpotifyFlacGUI(QMainWindow):
         self.status_label.setText("Preparing...")
         
         format_type = 'artist_title' if self.format_artist_title.isChecked() else 'title_artist'
+        fallback = self.fallback_checkbox.isChecked()
+        
         self.worker = DownloaderWorker(
             metadata=self.metadata, 
             output_dir=output_dir,
-            filename_format=format_type
+            filename_format=format_type,
+            use_fallback=fallback
         )
         
         self.worker.progress.connect(self.update_progress)
