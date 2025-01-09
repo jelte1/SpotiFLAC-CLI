@@ -111,8 +111,7 @@ class TrackDownloader:
                         file.write(chunk)
                         downloaded_size += len(chunk)
                         if self.progress_callback:
-                            progress = int((downloaded_size / total_size) * 100) if total_size > 0 else 0
-                            self.progress_callback(progress)
+                            self.progress_callback(downloaded_size, total_size)
                 
                 if downloaded_size == 0:
                     raise Exception("No data received from server")
