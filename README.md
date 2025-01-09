@@ -15,7 +15,7 @@ Sometimes, the **download speed** from Lucida can be fast or slow; it varies unp
 ![image](https://github.com/user-attachments/assets/abcb01f3-ff3e-4496-afec-df720553a189)
 
 > - When **Headless** is enabled, the browser runs in the background without a graphical interface, improving performance and allowing seamless automation.
-> - I highly recommend **Tidal** or **Amazon Music** because Qobuz's song collection is sometimes incomplete.
+> - I highly recommend **Tidal** or **Amazon Music.**
 
 ![image](https://github.com/user-attachments/assets/75a61cef-05a8-4f2c-b40b-ba5d49885ffe)
 
