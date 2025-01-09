@@ -1,12 +1,13 @@
 import sys
 import asyncio
 import os
+import time
 from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                             QProgressBar, QFileDialog, QCheckBox, QRadioButton, 
                             QGroupBox)
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings, QTimer
 from PyQt6.QtGui import QIcon, QPixmap, QCursor
 from GetMetadata import get_metadata
 from LucidaDownloader import TrackDownloader
@@ -28,10 +29,11 @@ class MetadataFetcher(QThread):
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
     
-    def __init__(self, url, headless=True):
+    def __init__(self, url, headless=True, use_fallback=False):
         super().__init__()
         self.url = url
         self.headless_mode = headless
+        self.use_fallback = use_fallback
         self.max_retries = 3
 
     def extract_track_id(self, url):
@@ -45,7 +47,8 @@ class MetadataFetcher(QThread):
         
         for attempt in range(self.max_retries):
             try:
-                lucida_url = f"https://lucida.to/?url=https%3A%2F%2Fopen.spotify.com%2Ftrack%2F{track_id}&country=auto&to=tidal"
+                platform = "amazon" if self.use_fallback else "tidal"
+                lucida_url = f"https://lucida.to/?url=https%3A%2F%2Fopen.spotify.com%2Ftrack%2F{track_id}&country=auto&to={platform}"
                 browser = await zd.start(headless=self.headless_mode)
                 try:
                     page = await browser.get(lucida_url)
@@ -82,6 +85,7 @@ class MetadataFetcher(QThread):
 
 class DownloaderWorker(QThread):
     progress = pyqtSignal(int)
+    status = pyqtSignal(str)
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
     
@@ -91,10 +95,35 @@ class DownloaderWorker(QThread):
         self.output_dir = output_dir
         self.filename_format = filename_format
         self.downloader = TrackDownloader()
+        self.last_update_time = 0
+        self.last_downloaded_size = 0
+        
+    def format_size(self, size_bytes):
+        return f"{size_bytes / (1024 * 1024):.2f}MB"
+        
+    def format_speed(self, speed_bytes):
+        return f"{speed_bytes * 8 / (1024 * 1024):.2f}Mbps"
+        
+    def progress_callback(self, downloaded_size, total_size):
+        current_time = time.time()
+        if current_time - self.last_update_time >= 0.5:  # Update every 0.5 seconds
+            progress = int((downloaded_size / total_size) * 100) if total_size > 0 else 0
+            self.progress.emit(progress)
+            
+            # Calculate speed
+            time_diff = current_time - self.last_update_time
+            if time_diff > 0:
+                speed = (downloaded_size - self.last_downloaded_size) / time_diff
+                status = f"Downloading... {self.format_size(downloaded_size)}/{self.format_size(total_size)} | {self.format_speed(speed)}"
+                self.status.emit(status)
+            
+            self.last_update_time = current_time
+            self.last_downloaded_size = downloaded_size
         
     def run(self):
         try:
-            self.downloader.set_progress_callback(self.progress.emit)
+            self.status.emit("Preparing...")
+            self.downloader.set_progress_callback(self.progress_callback)
             self.downloader.set_filename_format(self.filename_format)
             self.progress.emit(0)
             downloaded_file = self.downloader.download(self.metadata, self.output_dir)
@@ -128,9 +157,11 @@ class SpotifyFlacGUI(QMainWindow):
         
     def load_settings(self):
         headless = self.settings.value('headless', True, type=bool)
+        fallback = self.settings.value('fallback', False, type=bool)
         format_type = self.settings.value('format', 'title_artist')
         output_dir = self.settings.value('output_dir', self.default_music_dir)
         self.headless_checkbox.setChecked(headless)
+        self.fallback_checkbox.setChecked(fallback)
         self.format_title_artist.setChecked(format_type == 'title_artist')
         self.format_artist_title.setChecked(format_type == 'artist_title')
         self.dir_input.setText(output_dir)
@@ -138,6 +169,8 @@ class SpotifyFlacGUI(QMainWindow):
     def setup_settings_persistence(self):
         self.headless_checkbox.stateChanged.connect(
             lambda x: self.settings.setValue('headless', bool(x)))
+        self.fallback_checkbox.stateChanged.connect(
+            lambda x: self.settings.setValue('fallback', bool(x)))
         self.format_title_artist.toggled.connect(
             lambda x: self.settings.setValue('format', 'title_artist' if x else 'artist_title'))
         self.dir_input.textChanged.connect(
@@ -196,6 +229,11 @@ class SpotifyFlacGUI(QMainWindow):
         self.headless_checkbox.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.headless_checkbox.setChecked(True)
         settings_container_layout.addWidget(self.headless_checkbox)
+        
+        self.fallback_checkbox = QCheckBox("Fallback")
+        self.fallback_checkbox.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.fallback_checkbox.setChecked(False)
+        settings_container_layout.addWidget(self.fallback_checkbox)
         
         format_widget = QWidget()
         format_layout = QHBoxLayout(format_widget)
@@ -323,7 +361,8 @@ class SpotifyFlacGUI(QMainWindow):
         self.fetch_button.setEnabled(False)
         self.status_label.setText("Fetching track information...")
         headless = self.headless_checkbox.isChecked()
-        self.fetcher = MetadataFetcher(url, headless=headless)
+        use_fallback = self.fallback_checkbox.isChecked()
+        self.fetcher = MetadataFetcher(url, headless=headless, use_fallback=use_fallback)
         self.fetcher.finished.connect(self.handle_track_info)
         self.fetcher.error.connect(self.handle_fetch_error)
         self.fetcher.start()
@@ -415,7 +454,7 @@ class SpotifyFlacGUI(QMainWindow):
         self.cancel_button.hide()
         self.progress_bar.show()
         self.progress_bar.setValue(0)
-        self.status_label.setText("Downloading...")
+        self.status_label.setText("Preparing...")
         
         format_type = 'artist_title' if self.format_artist_title.isChecked() else 'title_artist'
         self.worker = DownloaderWorker(
@@ -425,9 +464,13 @@ class SpotifyFlacGUI(QMainWindow):
         )
         
         self.worker.progress.connect(self.update_progress)
+        self.worker.status.connect(self.update_status)
         self.worker.finished.connect(self.download_finished)
         self.worker.error.connect(self.download_error)
         self.worker.start()
+
+    def update_status(self, status):
+        self.status_label.setText(status)
 
     def update_progress(self, value):
         self.progress_bar.setValue(value)
