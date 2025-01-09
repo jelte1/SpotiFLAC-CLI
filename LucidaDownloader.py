@@ -5,13 +5,15 @@ import asyncio
 from GetMetadata import main as get_metadata
 
 class TrackDownloader:
-    def __init__(self):
+    def __init__(self, use_fallback=False):
         self.client = requests.Session()
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
         self.progress_callback = None
         self.filename_format = 'title_artist'
+        self.use_fallback = use_fallback
+        self.base_domain = "lucida.su" if use_fallback else "lucida.to"
 
     def set_progress_callback(self, callback):
         self.progress_callback = callback
@@ -66,7 +68,7 @@ class TrackDownloader:
             "url": track_url
         }
 
-        response = self.client.post("https://lucida.to/api/load?url=/api/fetch/stream/v2", 
+        response = self.client.post(f"https://{self.base_domain}/api/load?url=/api/fetch/stream/v2", 
                                     json=initial_request, 
                                     headers=self.headers)
         
@@ -84,7 +86,7 @@ class TrackDownloader:
 
         file_name = self.generate_filename(metadata)
 
-        completion_url = f"https://{server}.lucida.to/api/fetch/request/{handoff}"
+        completion_url = f"https://{server}.{self.base_domain}/api/fetch/request/{handoff}"
 
         print("Waiting for track processing to complete")
         while True:
@@ -95,7 +97,7 @@ class TrackDownloader:
                 raise Exception(f"API request failed: {completion_response.get('message', 'Unknown error')}")
             time.sleep(1)
 
-        download_url = f"https://{server}.lucida.to/api/fetch/request/{handoff}/download"
+        download_url = f"https://{server}.{self.base_domain}/api/fetch/request/{handoff}/download"
         print(f"Starting download of: {file_name}")
         
         response = self.client.get(download_url, stream=True, headers=self.headers)
