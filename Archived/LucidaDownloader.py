@@ -23,9 +23,12 @@ class TrackDownloader:
             
         filename = ' '.join(filename.split())
         filename = filename.replace(' ,', ',')
-        filename = filename.replace(',', ', ').replace('  ', ' ')
-        
-        return filename.strip()
+        filename = filename.replace(',', ', ')
+        while '  ' in filename:
+            filename = filename.replace('  ', ' ')
+        filename = filename.rsplit('.', 1)
+        filename[0] = filename[0].strip()
+        return '.'.join(filename)
 
     def download(self, metadata, output_dir):
         track_url = metadata['url']
