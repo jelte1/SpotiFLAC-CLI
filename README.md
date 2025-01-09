@@ -5,17 +5,18 @@
 > [!NOTE]  
 > Requires **Google Chrome**
 
-#### [Download](https://github.com/afkarxyz/SpotifyFLAC/releases/download/v1.0/SpotifyFLAC.exe) Spotify FLAC
+#### [Download](https://github.com/afkarxyz/SpotifyFLAC/releases/download/v1.1/SpotifyFLAC.exe) Spotify FLAC
 
 ## Screenshots
 
-![image](https://github.com/user-attachments/assets/94f4cf8f-eac7-4f97-ae7e-10f47f6aeac6)
+![image](https://github.com/user-attachments/assets/47d9af02-db9b-4e3c-ac77-f5a5c4b54afe)
 
-![image](https://github.com/user-attachments/assets/d984b31f-aa41-446b-b0eb-7e303610f153)
+> - When **Headless** is enabled, the browser runs in the background without a graphical interface, improving performance and allowing seamless automation.
+> - When **Fallback** is enabled, it will use another server.
 
-![image](https://github.com/user-attachments/assets/2bad18c8-ed59-4533-b5c5-6323e6e27f36)
+![image](https://github.com/user-attachments/assets/75a61cef-05a8-4f2c-b40b-ba5d49885ffe)
 
-> When **Headless** is enabled, the browser runs in the background without a graphical interface, improving performance and allowing seamless automation.
+![image](https://github.com/user-attachments/assets/84dfcfec-7c9d-4b5b-8624-3558cd3155be)
 
 ## Lossless Audio Check
 
