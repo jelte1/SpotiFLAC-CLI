@@ -19,8 +19,8 @@
 
 ## Lossless Audio Check
 
-![image](https://github.com/user-attachments/assets/649b85e8-d96f-4c80-a652-177b26cf621c)
+![image](https://github.com/user-attachments/assets/d63b422d-0ea3-4307-850f-96c99d7eaa9a)
 
-![image](https://github.com/user-attachments/assets/7ffd0367-83d6-4136-8a45-bb35c547a8c6)
+![image](https://github.com/user-attachments/assets/7649e6e1-d5d1-49b3-b83f-965d44651d05)
 
 #### [Download](https://github.com/afkarxyz/SpotifyFLAC/releases/download/v0/FLAC-Checker.zip) FLAC Checker
