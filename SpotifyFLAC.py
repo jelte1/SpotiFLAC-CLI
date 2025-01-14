@@ -102,10 +102,22 @@ class DownloaderWorker(QThread):
         self.last_downloaded_size = 0
         
     def format_size(self, size_bytes):
-        return f"{size_bytes / (1024 * 1024):.2f}MB"
+        units = ['B', 'KB', 'MB', 'GB']
+        index = 0
+        while size_bytes >= 1024 and index < len(units) - 1:
+            size_bytes /= 1024
+            index += 1
+        return f"{size_bytes:.2f}{units[index]}"
         
     def format_speed(self, speed_bytes):
-        return f"{speed_bytes * 8 / (1024 * 1024):.2f}Mbps"
+        speed_bits = speed_bytes * 8
+        
+        if speed_bits >= 1024 * 1024:
+            speed_mbps = speed_bits / (1024 * 1024)
+            return f"{speed_mbps:.2f}Mbps"
+        else:
+            speed_kbps = speed_bits / 1024
+            return f"{speed_kbps:.2f}Kbps"
         
     def progress_callback(self, downloaded_size, total_size):
         current_time = time.time()
@@ -388,9 +400,37 @@ class SpotifyFlacGUI(QMainWindow):
         self.progress_bar.hide()
         self.main_layout.addWidget(self.progress_bar)
 
+        bottom_layout = QHBoxLayout()
+        
         self.status_label = QLabel("")
-        self.main_layout.addWidget(self.status_label)
-
+        bottom_layout.addWidget(self.status_label, stretch=1)
+        
+        self.update_button = QPushButton()
+        icon_path = os.path.join(os.path.dirname(__file__), "update.svg")
+        if os.path.exists(icon_path):
+            self.update_button.setIcon(QIcon(icon_path))
+        self.update_button.setFixedSize(16, 16)
+        self.update_button.setStyleSheet("""
+            QPushButton {
+                border: none;
+                background: transparent;
+            }
+            QPushButton:hover {
+                background: transparent;
+            }
+        """)
+        self.update_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.update_button.setToolTip("Check for Updates")
+        self.update_button.clicked.connect(self.open_update_page)
+        
+        bottom_layout.addWidget(self.update_button)
+        
+        self.main_layout.addLayout(bottom_layout)
+        
+    def open_update_page(self):
+        import webbrowser
+        webbrowser.open('https://github.com/afkarxyz/SpotifyFLAC/releases')
+        
     def validate_url(self, url):
         url = url.strip()
         self.fetch_button.setEnabled(False)
@@ -439,6 +479,7 @@ class SpotifyFlacGUI(QMainWindow):
         self.track_widget.show()
         self.download_button.show()
         self.cancel_button.show()
+        self.update_button.hide()
         self.status_label.clear()
         self.adjustWindowHeight()
 
@@ -479,6 +520,7 @@ class SpotifyFlacGUI(QMainWindow):
         self.status_label.clear()
         self.metadata = None
         self.fetch_button.setEnabled(True)
+        self.update_button.show()
         self.setFixedHeight(180)
 
     def button_clicked(self):
@@ -499,6 +541,7 @@ class SpotifyFlacGUI(QMainWindow):
         self.track_widget.hide()
         self.input_widget.show()
         self.metadata = None
+        self.update_button.show()
         self.setFixedHeight(180)
 
     def start_download(self):
