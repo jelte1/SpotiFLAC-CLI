@@ -10,11 +10,11 @@
 > [!WARNING] 
 Sometimes, the **download speed** from Lucida can be fast or slow; it varies unpredictably.
 
-#### [Download](https://github.com/afkarxyz/SpotifyFLAC/releases/download/v1.3/SpotifyFLAC.exe) Spotify FLAC
+#### [Download](https://github.com/afkarxyz/SpotifyFLAC/releases/download/v1.4/SpotifyFLAC.exe) Spotify FLAC
 
 ## Screenshots
 
-![image](https://github.com/user-attachments/assets/8b0dbd29-3820-415e-9e51-1f0b672cec86)
+![image](https://github.com/user-attachments/assets/c2057543-7f15-470e-beeb-2451a3764d15)
 
 > - When **Headless** is enabled, the browser runs in the background without a graphical interface, improving performance and allowing seamless automation.
 > - When **Fallback** is enabled, it will use the backup server Lucida.su
