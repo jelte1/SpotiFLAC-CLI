@@ -8,6 +8,8 @@
 
 ### [Download](https://github.com/afkarxyz/SpotifyFLAC/releases/download/v1.4/SpotifyFLAC.exe) Spotify FLAC
 
+#
+
 > [!NOTE]  
 > Requires **Google Chrome**
 
