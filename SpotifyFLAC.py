@@ -9,8 +9,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QGroupBox, QComboBox)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings, QSize
 from PyQt6.QtGui import QIcon, QPixmap, QCursor
-from GetMetadata import get_metadata
-from LucidaDownloader import TrackDownloader
+from getMetadata import get_metadata
+from getTracks import TrackDownloader
 
 class ImageDownloader(QThread):
     finished = pyqtSignal(bytes)
@@ -162,8 +162,7 @@ class ServiceComboBox(QComboBox):
         services = [
             {'id': 'tidal', 'name': 'Tidal', 'icon': 'tidal.png'},
             {'id': 'amazon', 'name': 'Amazon Music', 'icon': 'amazon.png'},
-            {'id': 'qobuz', 'name': 'Qobuz', 'icon': 'qobuz.png'},
-            {'id': 'deezer', 'name': 'Deezer', 'icon': 'deezer.png'}
+            {'id': 'qobuz', 'name': 'Qobuz', 'icon': 'qobuz.png'}
         ]
         
         for service in services:
