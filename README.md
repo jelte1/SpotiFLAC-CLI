@@ -6,7 +6,7 @@
 <b>Spotify FLAC</b> allows you to download Spotify tracks in true FLAC format through services like Tidal, Amazon Music, Qobuz, and Deezer with the help of Lucida.
 </div>
 
-### [Download](https://github.com/afkarxyz/SpotifyFLAC/releases/download/v1.4/SpotifyFLAC.exe)
+### [Download](https://github.com/afkarxyz/SpotifyFLAC/releases/download/v1.5/SpotifyFLAC.exe)
 
 #
 
@@ -23,7 +23,7 @@ Sometimes, the **download speed** from Lucida can be fast or slow; it varies unp
 > - When **Headless** is enabled, the browser runs in the background without a graphical interface, improving performance and allowing seamless automation.
 > - When **Fallback** is enabled, it will use the backup server Lucida.su
 > - **Filename: Title** means the filename format is `Title - Artist`, and vice versa.
-> - I highly recommend **Tidal** or **Amazon Music** because `Qobuz` and `Deezer` occasionally experience issues.
+> - I highly recommend **Tidal** or **Amazon Music** because `Qobuz` occasionally experience issues.
 
 ![image](https://github.com/user-attachments/assets/75a61cef-05a8-4f2c-b40b-ba5d49885ffe)
 
