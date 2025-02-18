@@ -2,13 +2,14 @@ import sys
 import asyncio
 import os
 import time
+import requests
 from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                             QProgressBar, QFileDialog, QCheckBox, QRadioButton, 
-                            QGroupBox, QComboBox)
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings, QSize
-from PyQt6.QtGui import QIcon, QPixmap, QCursor
+                            QGroupBox, QComboBox, QDialog, QDialogButtonBox)
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings, QSize, QTimer, QUrl
+from PyQt6.QtGui import QIcon, QPixmap, QCursor,QDesktopServices
 from getMetadata import get_metadata
 from getTracks import TrackDownloader
 
@@ -178,11 +179,48 @@ class ServiceComboBox(QComboBox):
         pixmap.fill(Qt.GlobalColor.transparent)
         pixmap.save(path)
 
-class SpotifyFlacGUI(QMainWindow):
+class UpdateDialog(QDialog):
+    def __init__(self, current_version, new_version, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Update Available")
+        self.setFixedWidth(400)
+        self.setModal(True)
+
+        layout = QVBoxLayout()
+
+        message = QLabel(f"A new version of SpotiFLAC is available!\n\n"
+                        f"Current version: v{current_version}\n"
+                        f"New version: v{new_version}")
+        message.setWordWrap(True)
+        layout.addWidget(message)
+
+        self.disable_check = QCheckBox("Turn off update checking")
+        self.disable_check.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout.addWidget(self.disable_check)
+
+        button_box = QDialogButtonBox()
+        self.update_button = QPushButton("Update")
+        self.update_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        
+        button_box.addButton(self.update_button, QDialogButtonBox.ButtonRole.AcceptRole)
+        button_box.addButton(self.cancel_button, QDialogButtonBox.ButtonRole.RejectRole)
+        
+        layout.addWidget(button_box)
+
+        self.setLayout(layout)
+
+        self.update_button.clicked.connect(self.accept)
+        self.cancel_button.clicked.connect(self.reject)
+        
+class SpotiFlacGUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.settings = QSettings('SpotifyFlac', 'Settings')
-        self.setWindowTitle("Spotify FLAC")
+        self.current_version = "1.6"
+        self.settings = QSettings('SpotiFlac', 'Settings')
+        self.setWindowTitle("SpotiFLAC")
+        self.check_for_updates = self.settings.value('check_for_updates', True, type=bool)
         
         icon_path = os.path.join(os.path.dirname(__file__), "icon.svg")
         if os.path.exists(icon_path):
@@ -200,6 +238,34 @@ class SpotifyFlacGUI(QMainWindow):
         self.url_input.textChanged.connect(self.validate_url)
         self.load_settings()
         self.setup_settings_persistence()
+        
+        last_url = self.settings.value('last_url', '')
+        self.url_input.setText(last_url)
+        self.url_input.textChanged.connect(self.save_url)
+        
+        if self.check_for_updates:
+            QTimer.singleShot(0, self.check_updates)
+
+    def check_updates(self):
+        try:
+            response = requests.get("https://raw.githubusercontent.com/afkarxyz/SpotiFLAC/refs/heads/main/version.json")
+            if response.status_code == 200:
+                data = response.json()
+                new_version = data.get("version")
+                
+                if new_version and new_version != self.current_version:
+                    dialog = UpdateDialog(self.current_version, new_version, self)
+                    result = dialog.exec()
+                    
+                    if dialog.disable_check.isChecked():
+                        self.settings.setValue('check_for_updates', False)
+                        self.check_for_updates = False
+                    
+                    if result == QDialog.DialogCode.Accepted:
+                        QDesktopServices.openUrl(QUrl("https://github.com/afkarxyz/SpotiFLAC/releases"))
+                        
+        except Exception as e:
+            print(f"Error checking for updates: {e}")
         
     def load_settings(self):
         headless = self.settings.value('headless', True, type=bool)
@@ -425,10 +491,14 @@ class SpotifyFlacGUI(QMainWindow):
         bottom_layout.addWidget(self.update_button)
         
         self.main_layout.addLayout(bottom_layout)
-        
+
+    def save_url(self, url):
+        self.settings.setValue('last_url', url)
+        self.validate_url(url)
+                
     def open_update_page(self):
         import webbrowser
-        webbrowser.open('https://github.com/afkarxyz/SpotifyFLAC/releases')
+        webbrowser.open('https://github.com/afkarxyz/SpotiFLAC/releases')
         
     def validate_url(self, url):
         url = url.strip()
@@ -529,6 +599,7 @@ class SpotifyFlacGUI(QMainWindow):
             self.start_download()
 
     def clear_form(self):
+        self.settings.setValue('last_url', '')
         self.url_input.clear()
         self.progress_bar.hide()
         self.progress_bar.setValue(0)
@@ -600,7 +671,7 @@ class SpotifyFlacGUI(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    window = SpotifyFlacGUI()
+    window = SpotiFlacGUI()
     window.show()
     sys.exit(app.exec())
 
