@@ -2,7 +2,7 @@ import requests
 import time
 import os
 import asyncio
-from GetMetadata import main as get_metadata
+from getMetadata import main as get_metadata
 
 class TrackDownloader:
     def __init__(self, use_fallback=False):
