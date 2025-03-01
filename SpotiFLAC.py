@@ -1,7 +1,7 @@
 import sys
-import asyncio
 import os
 import time
+from datetime import datetime
 import requests
 from pathlib import Path
 from packaging import version
@@ -11,7 +11,6 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QGroupBox, QComboBox, QDialog, QDialogButtonBox)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings, QSize, QTimer, QUrl
 from PyQt6.QtGui import QIcon, QPixmap, QCursor,QDesktopServices
-from getMetadata import get_metadata
 from getTracks import TrackDownloader
 
 class ImageDownloader(QThread):
@@ -31,39 +30,17 @@ class MetadataFetcher(QThread):
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
     
-    def __init__(self, url, headless=True, service="tidal", use_fallback=False):
+    def __init__(self, url, service="amazon", use_fallback=False):
         super().__init__()
         self.url = url
-        self.headless_mode = headless
         self.service = service
         self.use_fallback = use_fallback
         self.max_retries = 3
 
     def extract_track_id(self, url):
         if "track/" in url:
-            return url.split("track/")[1].split("?")[0]
+            return url.split("track/")[1].split("?")[0].split("/")[0]
         return None
-
-    async def fetch_metadata(self, track_id):
-        import zendriver as zd
-        from asyncio import sleep
-        
-        domain = "lucida.su" if self.use_fallback else "lucida.to"
-        
-        for attempt in range(self.max_retries):
-            try:
-                lucida_url = f"https://{domain}/?url=https%3A%2F%2Fopen.spotify.com%2Ftrack%2F{track_id}&country=auto&to={self.service}"
-                browser = await zd.start(headless=self.headless_mode)
-                try:
-                    page = await browser.get(lucida_url)
-                    return await get_metadata(page)
-                finally:
-                    await browser.stop()
-            except Exception as e:
-                if "refused" in str(e).lower() and attempt < self.max_retries - 1:
-                    await sleep(2 * (attempt + 1))
-                    continue
-                raise e
 
     def run(self):
         try:
@@ -72,11 +49,33 @@ class MetadataFetcher(QThread):
                 self.error.emit("Invalid Spotify URL")
                 return
 
-            metadata = asyncio.run(self.fetch_metadata(track_id))
-            if metadata:
-                self.finished.emit(metadata)
-            else:
-                self.error.emit("Failed to fetch track metadata")
+            fallback = "su" if self.use_fallback else "to"
+            api_url = f"https://apislucida.vercel.app/{fallback}/{track_id}/{self.service}"
+            
+            for attempt in range(self.max_retries):
+                try:
+                    response = requests.get(api_url)
+                    response.raise_for_status()
+                    
+                    metadata = response.json()
+                    formatted_metadata = {
+                        'title': metadata['title'],
+                        'artists': metadata['artists'],
+                        'cover': metadata['coverArtwork'],
+                        'url': metadata['url'],
+                        'token': metadata['token'],
+                        'duration': metadata.get('durationMs', 0),
+                        'release_date': metadata.get('releaseDate', '')
+                    }
+                    
+                    self.finished.emit(formatted_metadata)
+                    return
+                    
+                except requests.exceptions.RequestException as e:
+                    if attempt < self.max_retries - 1:
+                        time.sleep(2 * (attempt + 1))
+                        continue
+                    raise e
 
         except Exception as e:
             error_msg = str(e)
@@ -162,9 +161,8 @@ class ServiceComboBox(QComboBox):
             os.makedirs(icons_dir)
             
         services = [
-            {'id': 'tidal', 'name': 'Tidal', 'icon': 'tidal.png'},
             {'id': 'amazon', 'name': 'Amazon Music', 'icon': 'amazon.png'},
-            {'id': 'qobuz', 'name': 'Qobuz', 'icon': 'qobuz.png'}
+            {'id': 'tidal', 'name': 'Tidal', 'icon': 'tidal.png'}
         ]
         
         for service in services:
@@ -218,7 +216,7 @@ class UpdateDialog(QDialog):
 class SpotiFlacGUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.current_version = "1.7"
+        self.current_version = "1.8"
         self.settings = QSettings('SpotiFlac', 'Settings')
         self.setWindowTitle("SpotiFLAC")
         self.check_for_updates = self.settings.value('check_for_updates', True, type=bool)
@@ -269,13 +267,11 @@ class SpotiFlacGUI(QMainWindow):
             print(f"Error checking for updates: {e}")
         
     def load_settings(self):
-        headless = self.settings.value('headless', True, type=bool)
         fallback = self.settings.value('fallback', False, type=bool)
-        service = self.settings.value('service', 'tidal')
+        service = self.settings.value('service', 'amazon')
         format_type = self.settings.value('format', 'title_artist')
         output_dir = self.settings.value('output_dir', self.default_music_dir)
         
-        self.headless_checkbox.setChecked(headless)
         self.fallback_checkbox.setChecked(fallback)
         
         for i in range(self.service_combo.count()):
@@ -288,8 +284,6 @@ class SpotiFlacGUI(QMainWindow):
         self.dir_input.setText(output_dir)
         
     def setup_settings_persistence(self):
-        self.headless_checkbox.stateChanged.connect(
-            lambda x: self.settings.setValue('headless', bool(x)))
         self.fallback_checkbox.stateChanged.connect(
             lambda x: self.settings.setValue('fallback', bool(x)))
         self.service_combo.currentIndexChanged.connect(
@@ -348,12 +342,7 @@ class SpotiFlacGUI(QMainWindow):
         settings_container_layout.setContentsMargins(0, 0, 0, 0)
         settings_container_layout.setSpacing(10)
         
-        self.headless_checkbox = QCheckBox("Headless")
-        self.headless_checkbox.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.headless_checkbox.setChecked(True)
-        settings_container_layout.addWidget(self.headless_checkbox)
-        
-        self.fallback_checkbox = QCheckBox("Fallback")
+        self.fallback_checkbox = QCheckBox("Fallback Server")
         self.fallback_checkbox.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.fallback_checkbox.setChecked(False)
         settings_container_layout.addWidget(self.fallback_checkbox)
@@ -377,7 +366,7 @@ class SpotiFlacGUI(QMainWindow):
         format_layout.setContentsMargins(0, 0, 0, 0)
         format_layout.setSpacing(10)
         
-        format_label = QLabel("Filename:")
+        format_label = QLabel("Filename Format:")
         self.format_title_artist = QRadioButton("Title")
         self.format_artist_title = QRadioButton("Artist")
         self.format_title_artist.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -529,10 +518,9 @@ class SpotiFlacGUI(QMainWindow):
             return
         self.fetch_button.setEnabled(False)
         self.status_label.setText("Fetching track information...")
-        headless = self.headless_checkbox.isChecked()
         fallback = self.fallback_checkbox.isChecked()
         service = self.service_combo.currentData()
-        self.fetcher = MetadataFetcher(url, headless=headless, service=service, use_fallback=fallback)
+        self.fetcher = MetadataFetcher(url, service=service, use_fallback=fallback)
         self.fetcher.finished.connect(self.handle_track_info)
         self.fetcher.error.connect(self.handle_fetch_error)
         self.fetcher.start()
@@ -541,25 +529,43 @@ class SpotiFlacGUI(QMainWindow):
         self.metadata = metadata
         self.fetch_button.setEnabled(True)
         self.title_label.setText(metadata['title'].strip())
-        self.artist_label.setText(metadata['artists'].strip())
+        
+        artist_text = ""
+        
+        artists_list = metadata['artists'].strip().split(",")
+        if len(artists_list) > 1:
+            artist_text += "<b>Artists</b> " + metadata['artists'].strip()
+        else:
+            artist_text += "<b>Artist</b> " + metadata['artists'].strip()
+        
+        if metadata.get('release_date'):
+            try:
+                date_obj = datetime.fromisoformat(metadata['release_date'].replace('Z', '+00:00'))
+                formatted_date = date_obj.strftime("%d-%m-%Y")
+                artist_text += f"<br><b>Released</b> {formatted_date}"
+            except:
+                if metadata['release_date']:
+                    artist_text += f"<br><b>Released</b> {metadata['release_date']}"
+        
+        if metadata.get('duration'):
+            duration_ms = metadata['duration']
+            minutes = int(duration_ms / 60000)
+            seconds = int((duration_ms % 60000) / 1000)
+            artist_text += f"<br><b>Duration</b> {minutes}:{seconds:02d}"
+        
+        self.artist_label.setText(artist_text)
+        self.artist_label.setTextFormat(Qt.TextFormat.RichText)
+        
         self.image_downloader = ImageDownloader(metadata['cover'])
         self.image_downloader.finished.connect(self.update_cover_art)
         self.image_downloader.start()
+        
         self.input_widget.hide()
         self.track_widget.show()
         self.download_button.show()
         self.cancel_button.show()
         self.update_button.hide()
         self.status_label.clear()
-        self.adjustWindowHeight()
-
-    def adjustWindowHeight(self):
-        title_height = self.title_label.sizeHint().height()
-        artist_height = self.artist_label.sizeHint().height()
-        base_height = 180
-        additional_height = max(0, (title_height + artist_height) - 40)
-        new_height = min(300, base_height + additional_height)
-        self.setFixedHeight(int(new_height))
 
     def update_cover_art(self, image_data):
         pixmap = QPixmap()

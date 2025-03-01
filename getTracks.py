@@ -2,7 +2,6 @@ import requests
 import time
 import os
 import asyncio
-from getMetadata import main as get_metadata
 
 class TrackDownloader:
     def __init__(self, use_fallback=False):
@@ -14,6 +13,7 @@ class TrackDownloader:
         self.filename_format = 'title_artist'
         self.use_fallback = use_fallback
         self.base_domain = "lucida.su" if use_fallback else "lucida.to"
+        self.api_base = "https://apislucida.vercel.app"
 
     def set_progress_callback(self, callback):
         self.progress_callback = callback
@@ -28,9 +28,19 @@ class TrackDownloader:
             filename = f"{metadata['title']} - {metadata['artists']}.flac"
         return self.sanitize_filename(filename)
 
-    async def get_track_info(self):
-        metadata = await get_metadata()
-        return metadata
+    async def get_track_info(self, track_id, service="amazon", use_fallback=None):
+        if use_fallback is None:
+            use_fallback = self.use_fallback
+            
+        fallback = "su" if use_fallback else "to"
+        api_url = f"{self.api_base}/{fallback}/{track_id}/{service}"
+        
+        try:
+            response = requests.get(api_url)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"Failed to get track info: {str(e)}")
 
     def sanitize_filename(self, filename):
         invalid_chars = '<>:"/\\|?*'
@@ -48,8 +58,8 @@ class TrackDownloader:
 
     def download(self, metadata, output_dir):
         track_url = metadata['url']
-        primary_token = metadata['token']
-        expiry = metadata['expiry']
+        primary_token = metadata['token']['primary']
+        expiry = metadata['token']['expiry']
         
         print(f"Starting download for: {track_url}")
         
@@ -131,9 +141,11 @@ class TrackDownloader:
 async def main():
     downloader = TrackDownloader()
     output_dir = "."
+    track_id = "2plbrEY59IikOBgBGLjaoe"
+    service = "amazon"
     
     try:
-        metadata = await downloader.get_track_info()
+        metadata = await downloader.get_track_info(track_id, service)
         downloaded_file = downloader.download(metadata, output_dir)
         print(f"File downloaded successfully: {downloaded_file}")
     except Exception as e:

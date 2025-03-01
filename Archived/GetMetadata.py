@@ -1,7 +1,7 @@
 import asyncio
 import zendriver as zd
 
-async def get_metadata(page):
+async def get_metadata(page, headless=True):
     max_attempts = 40
     attempts = 0
     
@@ -14,9 +14,9 @@ async def get_metadata(page):
             const [url, config] = args;
             if (url.includes('/api/load?url=%2Fapi%2Ffetch%2Fstream%2Fv2')) {
                 const payload = JSON.parse(config.body);
-                const title = document.querySelector('h1.svelte-6pt9ji').textContent;
+                const title = document.querySelector('h1.svelte-6pt9ji').textContent.trim();
                 const artists = Array.from(document.querySelectorAll('h2.svelte-6pt9ji a.normal'))
-                                .map(a => a.textContent)
+                                .map(a => a.textContent.trim())
                                 .join(', ');
                 const cover = document.querySelector('.svelte-6pt9ji .meta.svelte-6pt9ji a').href;
                                 
@@ -82,8 +82,8 @@ async def get_metadata(page):
     
     raise TimeoutError("Timeout")
 
-async def main():
-    browser = await zd.start(headless=False)
+async def main(headless=True):
+    browser = await zd.start(headless=headless)
     try:
         track_id = "2plbrEY59IikOBgBGLjaoe"
         url = f"https://lucida.to/?url=https%3A%2F%2Fopen.spotify.com%2Ftrack%2F{track_id}&country=auto&to=tidal"
