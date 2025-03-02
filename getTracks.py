@@ -101,10 +101,31 @@ class TrackDownloader:
         print("Waiting for track processing to complete")
         while True:
             completion_response = self.client.get(completion_url, headers=self.headers).json()
-            if completion_response["status"] == "completed":
+            
+            status = completion_response["status"]
+            if status == "completed":
+                print("Processing completed: 100%")
                 break
-            elif completion_response["status"] == "error":
+            elif status == "error":
                 raise Exception(f"API request failed: {completion_response.get('message', 'Unknown error')}")
+            else:
+                progress = completion_response.get("progress", {})
+                if progress:
+                    current = progress.get("current", 0)
+                    total = progress.get("total", 100)
+                    percent = int((current / total) * 100) if total > 0 else 0
+                    action = progress.get("action", "Processing")
+                    print(f"Progress: {percent}% - {action} ({current}/{total})")
+                    
+                    if action.lower() == "metadata":
+                        if self.progress_callback:
+                            self.progress_callback(0, 0)
+                else:
+                    print(f"Status: {status} - Waiting for progress information...")
+                    if status.lower() == "metadata":
+                        if self.progress_callback:
+                            self.progress_callback(0, 0)
+            
             time.sleep(1)
 
         download_url = f"https://{server}.{self.base_domain}/api/fetch/request/{handoff}/download"
@@ -118,16 +139,33 @@ class TrackDownloader:
 
         try:
             with open(file_path, 'wb') as file:
+                start_time = time.time()
+                last_update_time = start_time
+                
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         file.write(chunk)
                         downloaded_size += len(chunk)
+                        
+                        current_time = time.time()
+                        if current_time - last_update_time >= 1:
+                            if total_size > 0:
+                                progress_percent = (downloaded_size / total_size) * 100
+                                elapsed_time = current_time - start_time
+                                speed = downloaded_size / (1024 * 1024 * elapsed_time) if elapsed_time > 0 else 0
+                                print(f"Download progress: {progress_percent:.2f}% ({downloaded_size}/{total_size}) - {speed:.2f} MB/s")
+                            else:
+                                print(f"Downloaded {downloaded_size / (1024 * 1024):.2f} MB")
+                            
+                            last_update_time = current_time
+                            
                         if self.progress_callback:
                             self.progress_callback(downloaded_size, total_size)
                 
                 if downloaded_size == 0:
                     raise Exception("No data received from server")
                 
+            print(f"Download completed: {file_path}")
             return file_path
             
         except Exception as e:
@@ -144,10 +182,20 @@ async def main():
     track_id = "2plbrEY59IikOBgBGLjaoe"
     service = "amazon"
     
+    def progress_update(current, total):
+        if total > 0:
+            percent = (current / total) * 100
+            print(f"\rDownload progress: {percent:.2f}% ({current}/{total})", end="")
+    
+    downloader.set_progress_callback(progress_update)
+    
     try:
+        print(f"Getting track info for ID: {track_id} from {service}")
         metadata = await downloader.get_track_info(track_id, service)
+        print(f"Track info received: {metadata['title']} by {metadata['artists']}")
+        
         downloaded_file = downloader.download(metadata, output_dir)
-        print(f"File downloaded successfully: {downloaded_file}")
+        print(f"\nFile downloaded successfully: {downloaded_file}")
     except Exception as e:
         print(f"An error occurred: {str(e)}")
 
