@@ -1,8 +1,8 @@
 import sys
 import os
+import requests
 import time
 from datetime import datetime
-import requests
 from pathlib import Path
 from packaging import version
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
@@ -130,7 +130,10 @@ class DownloaderWorker(QThread):
             time_diff = current_time - self.last_update_time
             if time_diff > 0:
                 speed = (downloaded_size - self.last_downloaded_size) / time_diff
-                status = f"Downloading... {self.format_size(downloaded_size)}/{self.format_size(total_size)} | {self.format_speed(speed)}"
+                if downloaded_size == 0 and total_size == 0:
+                    status = "Preparing metadata..."
+                else:
+                    status = f"Downloading... {self.format_size(downloaded_size)}/{self.format_size(total_size)} | {self.format_speed(speed)}"
                 self.status.emit(status)
             
             self.last_update_time = current_time
@@ -303,7 +306,7 @@ class UpdateDialog(QDialog):
 class SpotiFlacGUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.current_version = "1.9"
+        self.current_version = "2.0"
         self.settings = QSettings('SpotiFlac', 'Settings')
         self.setWindowTitle("SpotiFLAC")
         self.check_for_updates = self.settings.value('check_for_updates', True, type=bool)
@@ -362,7 +365,7 @@ class SpotiFlacGUI(QMainWindow):
         self.fallback_checkbox.setChecked(fallback)
         
         for i in range(self.service_combo.count()):
-            if self.service_combo.itemData(i) == service:
+            if self.service_combo.itemData(i, Qt.ItemDataRole.UserRole + 1) == service:
                 self.service_combo.setCurrentIndex(i)
                 break
                 
@@ -374,7 +377,7 @@ class SpotiFlacGUI(QMainWindow):
         self.fallback_checkbox.stateChanged.connect(
             lambda x: self.settings.setValue('fallback', bool(x)))
         self.service_combo.currentIndexChanged.connect(
-            lambda i: self.settings.setValue('service', self.service_combo.itemData(i)))
+            lambda i: self.settings.setValue('service', self.service_combo.itemData(i, Qt.ItemDataRole.UserRole + 1)))
         self.format_title_artist.toggled.connect(
             lambda x: self.settings.setValue('format', 'title_artist' if x else 'artist_title'))
         self.dir_input.textChanged.connect(
