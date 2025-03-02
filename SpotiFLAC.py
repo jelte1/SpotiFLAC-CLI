@@ -37,11 +37,19 @@ class MetadataFetcher(QThread):
         self.service = service
         self.use_fallback = use_fallback
         self.max_retries = 3
+        self.downloader = TrackDownloader(use_fallback=use_fallback)
 
     def extract_track_id(self, url):
         if "track/" in url:
             return url.split("track/")[1].split("?")[0].split("/")[0]
         return None
+
+    async def get_track_info_async(self, track_id, service, use_fallback):
+        try:
+            metadata = await self.downloader.get_track_info(track_id, service, use_fallback)
+            return metadata
+        except Exception as e:
+            raise e
 
     def run(self):
         try:
@@ -50,15 +58,12 @@ class MetadataFetcher(QThread):
                 self.error.emit("Invalid Spotify URL")
                 return
 
-            fallback = "su" if self.use_fallback else "to"
-            api_url = f"https://apislucida.vercel.app/{fallback}/{track_id}/{self.service}"
-            
+            import asyncio
             for attempt in range(self.max_retries):
                 try:
-                    response = requests.get(api_url)
-                    response.raise_for_status()
+                    metadata = asyncio.run(self.get_track_info_async(
+                        track_id, self.service, self.use_fallback))
                     
-                    metadata = response.json()
                     formatted_metadata = {
                         'title': metadata['title'],
                         'artists': metadata['artists'],
@@ -72,7 +77,7 @@ class MetadataFetcher(QThread):
                     self.finished.emit(formatted_metadata)
                     return
                     
-                except requests.exceptions.RequestException as e:
+                except Exception as e:
                     if attempt < self.max_retries - 1:
                         time.sleep(2 * (attempt + 1))
                         continue
@@ -306,7 +311,7 @@ class UpdateDialog(QDialog):
 class SpotiFlacGUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.current_version = "2.0"
+        self.current_version = "2.1"
         self.settings = QSettings('SpotiFlac', 'Settings')
         self.setWindowTitle("SpotiFLAC")
         self.check_for_updates = self.settings.value('check_for_updates', True, type=bool)
