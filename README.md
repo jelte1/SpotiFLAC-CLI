@@ -6,7 +6,7 @@
 <b>SpotiFLAC</b> allows you to download Spotify tracks in true FLAC format through services like Tidal, Amazon Music and Deezer with the help of Lucida.
 </div>
 
-### [Download](https://github.com/afkarxyz/SpotiFLAC/releases/download/v1.9/SpotiFLAC.exe)
+### [Download](https://github.com/afkarxyz/SpotiFLAC/releases/download/v2.0/SpotiFLAC.exe)
 
 #
 
