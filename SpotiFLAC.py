@@ -8,9 +8,10 @@ from packaging import version
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                             QProgressBar, QFileDialog, QCheckBox, QRadioButton, 
-                            QGroupBox, QComboBox, QDialog, QDialogButtonBox)
+                            QGroupBox, QComboBox, QDialog, QDialogButtonBox,
+                            QStyledItemDelegate, QStyle)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings, QSize, QTimer, QUrl
-from PyQt6.QtGui import QIcon, QPixmap, QCursor,QDesktopServices
+from PyQt6.QtGui import QIcon, QPixmap, QCursor, QDesktopServices, QBrush, QPalette
 from getTracks import TrackDownloader
 
 class ImageDownloader(QThread):
@@ -147,36 +148,122 @@ class DownloaderWorker(QThread):
         except Exception as e:
             self.error.emit(f"Error: {str(e)}")
 
+class ServiceStatusChecker(QThread):
+    status_updated = pyqtSignal(dict)
+    error = pyqtSignal(str)
+    
+    def run(self):
+        try:
+            response = requests.get("https://lucida.to/api/stats", timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                services_status = {}
+                
+                current_services = data.get('all', {}).get('downloads', {}).get('current', {}).get('services', {})
+                
+                services_status['amazon'] = current_services.get('amazon', 0) > 0
+                services_status['tidal'] = current_services.get('tidal', 0) > 0
+                services_status['deezer'] = current_services.get('deezer', 0) > 0
+                
+                self.status_updated.emit(services_status)
+            else:
+                self.error.emit(f"Server returned status code: {response.status_code}")
+        except Exception as e:
+            self.error.emit(f"Error checking service status: {str(e)}")
+
+
+class StatusIndicatorDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        item_data = index.data(Qt.ItemDataRole.UserRole)
+        is_online = item_data.get('online', False) if item_data else False
+        
+        super().paint(painter, option, index)
+        
+        if option.state & QStyle.StateFlag.State_Selected:
+            text_color = option.palette.color(QPalette.ColorGroup.Active, QPalette.ColorRole.HighlightedText)
+        else:
+            text_color = option.palette.color(QPalette.ColorGroup.Active, QPalette.ColorRole.Text)
+        
+        indicator_color = Qt.GlobalColor.green if is_online else Qt.GlobalColor.red
+        
+        circle_size = 6
+        circle_y = option.rect.center().y() - circle_size // 2
+        circle_x = option.rect.right() - circle_size - 10
+        
+        painter.save()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(indicator_color))
+        painter.drawEllipse(circle_x, circle_y, circle_size, circle_size)
+        painter.restore()
+
+
 class ServiceComboBox(QComboBox):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setIconSize(QSize(16, 16))
+        self.services_status = {}
+        
+        self.setItemDelegate(StatusIndicatorDelegate())
+        
         self.setup_items()
+        
+        self.status_checker = ServiceStatusChecker()
+        self.status_checker.status_updated.connect(self.update_service_status)
+        self.status_checker.error.connect(lambda e: print(f"Status check error: {e}"))
+        self.status_checker.start()
+        
+        self.status_timer = QTimer(self)
+        self.status_timer.timeout.connect(self.refresh_status)
+        self.status_timer.start(5000)
         
     def setup_items(self):
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        icons_dir = os.path.join(current_dir, 'icons')
         
-        if not os.path.exists(icons_dir):
-            os.makedirs(icons_dir)
-            
-        services = [
-            {'id': 'amazon', 'name': 'Amazon Music', 'icon': 'amazon.png'},
-            {'id': 'tidal', 'name': 'Tidal', 'icon': 'tidal.png'}
+        self.services = [
+            {'id': 'amazon', 'name': 'Amazon Music', 'icon': 'amazon.png', 'online': False},
+            {'id': 'tidal', 'name': 'Tidal', 'icon': 'tidal.png', 'online': False},
+            {'id': 'deezer', 'name': 'Deezer', 'icon': 'deezer.png', 'online': False}
         ]
         
-        for service in services:
-            icon_path = os.path.join(icons_dir, service['icon'])
+        for service in self.services:
+            icon_path = os.path.join(current_dir, service['icon'])
             if not os.path.exists(icon_path):
                 self.create_placeholder_icon(icon_path)
             
             icon = QIcon(icon_path)
-            self.addItem(icon, service['name'], service['id'])
+            
+            self.addItem(icon, service['name'])
+            item_index = self.count() - 1
+            self.setItemData(item_index, service['id'], Qt.ItemDataRole.UserRole + 1)
+            self.setItemData(item_index, service, Qt.ItemDataRole.UserRole)
     
     def create_placeholder_icon(self, path):
         pixmap = QPixmap(16, 16)
         pixmap.fill(Qt.GlobalColor.transparent)
         pixmap.save(path)
+    
+    def update_service_status(self, status_dict):
+        self.services_status = status_dict
+        
+        for i in range(self.count()):
+            service_id = self.itemData(i, Qt.ItemDataRole.UserRole + 1)
+            
+            if service_id in self.services_status:
+                service_data = self.itemData(i, Qt.ItemDataRole.UserRole)
+                if isinstance(service_data, dict):
+                    service_data['online'] = self.services_status[service_id]
+                    self.setItemData(i, service_data, Qt.ItemDataRole.UserRole)
+        
+        self.update()
+    
+    def refresh_status(self):
+        self.status_checker = ServiceStatusChecker()
+        self.status_checker.status_updated.connect(self.update_service_status)
+        self.status_checker.error.connect(lambda e: print(f"Status check error: {e}"))
+        self.status_checker.start()
+        
+    def currentData(self, role=Qt.ItemDataRole.UserRole + 1):
+        return super().currentData(role)
 
 class UpdateDialog(QDialog):
     def __init__(self, current_version, new_version, parent=None):
@@ -216,7 +303,7 @@ class UpdateDialog(QDialog):
 class SpotiFlacGUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.current_version = "1.8"
+        self.current_version = "1.9"
         self.settings = QSettings('SpotiFlac', 'Settings')
         self.setWindowTitle("SpotiFLAC")
         self.check_for_updates = self.settings.value('check_for_updates', True, type=bool)
@@ -342,7 +429,7 @@ class SpotiFlacGUI(QMainWindow):
         settings_container_layout.setContentsMargins(0, 0, 0, 0)
         settings_container_layout.setSpacing(10)
         
-        self.fallback_checkbox = QCheckBox("Fallback Server")
+        self.fallback_checkbox = QCheckBox("Fallback")
         self.fallback_checkbox.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.fallback_checkbox.setChecked(False)
         settings_container_layout.addWidget(self.fallback_checkbox)
@@ -366,9 +453,9 @@ class SpotiFlacGUI(QMainWindow):
         format_layout.setContentsMargins(0, 0, 0, 0)
         format_layout.setSpacing(10)
         
-        format_label = QLabel("Filename Format:")
-        self.format_title_artist = QRadioButton("Title")
-        self.format_artist_title = QRadioButton("Artist")
+        format_label = QLabel("Filename:")
+        self.format_title_artist = QRadioButton("Title - Artist")
+        self.format_artist_title = QRadioButton("Artist - Title")
         self.format_title_artist.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.format_artist_title.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.format_title_artist.setChecked(True)
