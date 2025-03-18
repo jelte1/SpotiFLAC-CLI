@@ -2,6 +2,8 @@ import requests
 import time
 import os
 import asyncio
+import re
+import base64
 
 class TrackDownloader:
     def __init__(self, use_fallback=False):
@@ -13,7 +15,6 @@ class TrackDownloader:
         self.filename_format = 'title_artist'
         self.use_fallback = use_fallback
         self.base_domain = "lucida.su" if use_fallback else "lucida.to"
-        self.api_base = "https://apislucida.vercel.app"
 
     def set_progress_callback(self, callback):
         self.progress_callback = callback
@@ -32,15 +33,121 @@ class TrackDownloader:
         if use_fallback is None:
             use_fallback = self.use_fallback
             
-        fallback = "su" if use_fallback else "to"
-        api_url = f"{self.api_base}/{fallback}/{track_id}/{service}"
+        domain_type = "su" if use_fallback else "to"
+        
+        spotify_url = f"https://open.spotify.com/track/{track_id}"
+        
+        result = self.convert_spotify_link(spotify_url, service, domain_type)
+        
+        if "error" in result:
+            raise Exception(f"Failed to get track info: {result['error']}")
+        
+        return result
+
+    def convert_spotify_link(self, spotify_url, target_service="amazon", domain_type="to"):
+        track_id_match = re.search(r'track/([a-zA-Z0-9]+)', spotify_url)
+        if not track_id_match:
+            return {"error": "Invalid Spotify URL"}
+        
+        domain = "lucida.to" if domain_type == "to" else "lucida.su"
+        base_url = f"https://{domain}"
+        
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": "id-ID,id;q=0.9",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Host": domain,
+            "Pragma": "no-cache",
+            "Upgrade-Insecure-Requests": "1",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
         
         try:
-            response = requests.get(api_url)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"Failed to get track info: {str(e)}")
+            headers["Referer"] = f"{base_url}/?url={spotify_url}&country=auto"
+            
+            request_params = {
+                "url": spotify_url,
+                "country": "auto",
+                "to": target_service
+            }
+            
+            session = requests.Session()
+            session.verify = False
+            
+            response = session.get(
+                base_url,
+                params=request_params,
+                headers=headers,
+                timeout=30
+            )
+            
+            html_content = response.text
+            
+            token_match = re.search(r'token:"([^"]+)"', html_content)
+            token_expiry_match = re.search(r'tokenExpiry:(\d+)', html_content)
+            
+            token = token_match.group(1) if token_match else None
+            token_expiry = int(token_expiry_match.group(1)) if token_expiry_match else None
+            
+            url = None
+            url_patterns = [
+                r'"url":"([^"]+)"',
+                r'href="(https?://[^"]*' + re.escape(target_service) + r'[^"]*track[^"]*)"',
+            ]
+            
+            for pattern in url_patterns:
+                url_match = re.search(pattern, html_content)
+                if url_match:
+                    url = url_match.group(1).replace('\\/', '/')
+                    break
+            
+            if not url:
+                redirect_patterns = [
+                    r'url=([^&"]+)',
+                    r'href="([^"]+)"',
+                    r'window\.location\.href\s*=\s*[\'"]([^\'"]+)[\'"]',
+                ]
+                
+                for pattern in redirect_patterns:
+                    matches = re.finditer(pattern, html_content)
+                    for match in matches:
+                        potential_url = match.group(1)
+                        if potential_url.startswith('http') and target_service.lower() in potential_url.lower():
+                            url = potential_url.replace('\\/', '/')
+                            break
+                
+                if not url:
+                    service_urls = re.finditer(r'(https?://[^"\s]+' + re.escape(target_service) + r'[^"\s]+)', html_content)
+                    for match in service_urls:
+                        url = match.group(1).replace('\\/', '/')
+                        break
+            
+            result = {
+                "service": target_service,
+                "url": url,
+                "token": {
+                    "primary": None,
+                    "expiry": None
+                },
+                "title": "Title",
+                "artists": "Artist"
+            }
+            
+            if token:
+                try:
+                    decoded_once = base64.b64decode(token).decode('latin1')
+                    decoded_token = base64.b64decode(decoded_once).decode('latin1')
+                    result["token"]["primary"] = decoded_token
+                except Exception:
+                    result["token"]["primary"] = token
+            
+            result["token"]["expiry"] = token_expiry
+            
+            return result
+                
+        except Exception as error:
+            return {"error": str(error)}
 
     def sanitize_filename(self, filename):
         invalid_chars = '<>:"/\\|?*'
@@ -177,7 +284,9 @@ class TrackDownloader:
             raise e
 
 async def main():
-    downloader = TrackDownloader()
+    use_fallback = False  
+    downloader = TrackDownloader(use_fallback)
+    
     output_dir = "."
     track_id = "2plbrEY59IikOBgBGLjaoe"
     service = "amazon"
@@ -192,7 +301,7 @@ async def main():
     try:
         print(f"Getting track info for ID: {track_id} from {service}")
         metadata = await downloader.get_track_info(track_id, service)
-        print(f"Track info received: {metadata['title']} by {metadata['artists']}")
+        print(f"Track info received, starting download process")
         
         downloaded_file = downloader.download(metadata, output_dir)
         print(f"\nFile downloaded successfully: {downloaded_file}")
