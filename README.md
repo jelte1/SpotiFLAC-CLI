@@ -15,13 +15,15 @@ Sometimes, the **download speed** from Lucida can be fast or slow; it varies unp
 
 ## Screenshots
 
+![image](https://github.com/user-attachments/assets/7fa82a25-0fe8-4b87-ba5c-2dd5933f211b)
+
+![image](https://github.com/user-attachments/assets/81e65977-11f0-4162-96f3-90730dd87e74)
+
+![image](https://github.com/user-attachments/assets/4dd37c0a-30e3-479a-9b3d-57fd360d87b3)
+
+![image](https://github.com/user-attachments/assets/04954db9-e94a-4f9d-8eac-46d7ff7a4c33)
+
 > When **Fallback** is enabled, it will use the backup server `Lucida.su`
-
-![image](https://github.com/user-attachments/assets/3db51367-45dc-470f-8d6e-8f783ebd6340)
-
-![image](https://github.com/user-attachments/assets/a9020973-f79c-40ba-ab76-e4a3955a1ba4)
-
-![image](https://github.com/user-attachments/assets/cf4d09dd-144f-4e7f-a204-78aad353cdbf)
 
 ## Lossless Audio Check
 
