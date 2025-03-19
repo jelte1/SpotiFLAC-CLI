@@ -12,22 +12,14 @@ class TrackDownloader:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
         self.progress_callback = None
-        self.filename_format = 'title_artist'
         self.use_fallback = use_fallback
         self.base_domain = "lucida.su" if use_fallback else "lucida.to"
 
     def set_progress_callback(self, callback):
         self.progress_callback = callback
-        
-    def set_filename_format(self, format_type):
-        self.filename_format = format_type
 
-    def generate_filename(self, metadata):
-        if self.filename_format == 'artist_title':
-            filename = f"{metadata['artists']} - {metadata['title']}.flac"
-        else:
-            filename = f"{metadata['title']} - {metadata['artists']}.flac"
-        return self.sanitize_filename(filename)
+    def generate_filename(self, track_id, service):
+        return f"{track_id}_{service}.flac"
 
     async def get_track_info(self, track_id, service="amazon", use_fallback=None):
         if use_fallback is None:
@@ -41,6 +33,8 @@ class TrackDownloader:
         
         if "error" in result:
             raise Exception(f"Failed to get track info: {result['error']}")
+        
+        result["track_id"] = track_id
         
         return result
 
@@ -73,7 +67,7 @@ class TrackDownloader:
             }
             
             session = requests.Session()
-            session.verify = False
+            session.verify = True
             
             response = session.get(
                 base_url,
@@ -129,9 +123,7 @@ class TrackDownloader:
                 "token": {
                     "primary": None,
                     "expiry": None
-                },
-                "title": "Title",
-                "artists": "Artist"
+                }
             }
             
             if token:
@@ -149,26 +141,17 @@ class TrackDownloader:
         except Exception as error:
             return {"error": str(error)}
 
-    def sanitize_filename(self, filename):
-        invalid_chars = '<>:"/\\|?*'
-        for char in invalid_chars:
-            filename = filename.replace(char, '')
-            
-        filename = ' '.join(filename.split())
-        filename = filename.replace(' ,', ',')
-        filename = filename.replace(',', ', ')
-        while '  ' in filename:
-            filename = filename.replace('  ', ' ')
-        filename = filename.rsplit('.', 1)
-        filename[0] = filename[0].strip()
-        return '.'.join(filename)
-
-    def download(self, metadata, output_dir):
+    def download(self, metadata, output_dir, is_paused_callback=None, is_stopped_callback=None):
         track_url = metadata['url']
         primary_token = metadata['token']['primary']
         expiry = metadata['token']['expiry']
+        track_id = metadata['track_id']
+        service = metadata['service']
         
         print(f"Starting download for: {track_url}")
+        
+        if is_stopped_callback and is_stopped_callback():
+            raise Exception("Download stopped by user")
         
         initial_request = {
             "account": {"id": "auto", "type": "country"},
@@ -201,12 +184,20 @@ class TrackDownloader:
         handoff = initial_response["handoff"]
         server = initial_response["server"]
 
-        file_name = self.generate_filename(metadata)
+        file_name = self.generate_filename(track_id, service)
 
         completion_url = f"https://{server}.{self.base_domain}/api/fetch/request/{handoff}"
 
         print("Waiting for track processing to complete")
         while True:
+            if is_stopped_callback and is_stopped_callback():
+                raise Exception("Download stopped by user")
+                
+            while is_paused_callback and is_paused_callback():
+                time.sleep(0.1)
+                if is_stopped_callback and is_stopped_callback():
+                    raise Exception("Download stopped by user")
+            
             completion_response = self.client.get(completion_url, headers=self.headers).json()
             
             status = completion_response["status"]
@@ -250,6 +241,20 @@ class TrackDownloader:
                 last_update_time = start_time
                 
                 for chunk in response.iter_content(chunk_size=8192):
+                    if is_stopped_callback and is_stopped_callback():
+                        file.close()
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                        raise Exception("Download stopped by user")
+                        
+                    while is_paused_callback and is_paused_callback():
+                        time.sleep(0.1)
+                        if is_stopped_callback and is_stopped_callback():
+                            file.close()
+                            if os.path.exists(file_path):
+                                os.remove(file_path)
+                            raise Exception("Download stopped by user")
+                    
                     if chunk:
                         file.write(chunk)
                         downloaded_size += len(chunk)

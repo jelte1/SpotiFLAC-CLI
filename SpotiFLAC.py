@@ -66,13 +66,14 @@ class DownloadWorker(QThread):
             def progress_update(current, total):
                 if total > 0:
                     percent = (current / total) * 100
-                    self.progress.emit(f"Download progress: {percent:.2f}% ({current}/{total})", 
+                    current_mb = current / (1024 * 1024)
+                    total_mb = total / (1024 * 1024)
+                    self.progress.emit(f"Download progress: {percent:.2f}% ({current_mb:.2f}MB/{total_mb:.2f}MB)", 
                                     int(percent))
                 else:
                     self.progress.emit(f"Processing metadata...", 0)
             
             downloader.set_progress_callback(progress_update)
-            downloader.set_filename_format(self.filename_format)
             
             total_tracks = len(self.tracks)
             
@@ -102,7 +103,16 @@ class DownloadWorker(QThread):
                     metadata = asyncio.run(downloader.get_track_info(track_id, self.service))
                     
                     self.progress.emit(f"Track info received, starting download process", 0)
-                    downloaded_file = downloader.download(metadata, track_outpath)
+                    
+                    is_paused_callback = lambda: self.is_paused
+                    is_stopped_callback = lambda: self.is_stopped
+                    
+                    downloaded_file = downloader.download(
+                        metadata, 
+                        track_outpath,
+                        is_paused_callback=is_paused_callback,
+                        is_stopped_callback=is_stopped_callback
+                    )
                     
                     if (self.is_album or (self.is_playlist and self.use_album_subfolders)) and self.use_track_numbers:
                         new_filename = f"{track.track_number:02d} - {self.get_formatted_filename(track)}"
@@ -300,7 +310,7 @@ class ServiceComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "2.2"
+        self.current_version = "2.3"
         self.tracks = []
         self.reset_state()
         
@@ -719,7 +729,7 @@ class SpotiFLACGUI(QWidget):
                 spacer = QSpacerItem(20, 6, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 about_layout.addItem(spacer)
 
-        footer_label = QLabel("v2.2 | March 2025")
+        footer_label = QLabel("v2.3 | March 2025")
         footer_label.setStyleSheet("font-size: 12px; color: palette(text); margin-top: 10px;")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -1044,8 +1054,27 @@ class SpotiFLACGUI(QWidget):
         self.tab_widget.setCurrentWidget(self.process_tab)
 
     def update_progress(self, message, percentage):
-        self.log_output.append(message)
-        self.log_output.moveCursor(QTextCursor.MoveOperation.End)
+        if "Download progress:" in message or "Processing metadata..." in message:
+            current_text = self.log_output.toPlainText()
+            
+            if current_text:
+                lines = current_text.split('\n')
+                
+                if "Download progress:" in lines[-1] or "Processing metadata..." in lines[-1]:
+                    lines[-1] = message
+                    
+                    new_text = '\n'.join(lines)
+                    
+                    self.log_output.setPlainText(new_text)
+                    
+                    self.log_output.moveCursor(QTextCursor.MoveOperation.End)
+                else:
+                    self.log_output.append(message)
+            else:
+                self.log_output.append(message)
+        else:
+            self.log_output.append(message)
+        
         if percentage > 0:
             self.progress_bar.setValue(percentage)
 
