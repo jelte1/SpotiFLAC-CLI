@@ -6,13 +6,14 @@ import re
 import base64
 
 class TrackDownloader:
-    def __init__(self, use_fallback=False):
+    def __init__(self, use_fallback=False, timeout=30):
         self.client = requests.Session()
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
         self.progress_callback = None
         self.use_fallback = use_fallback
+        self.timeout = timeout
         self.base_domain = "lucida.su" if use_fallback else "lucida.to"
 
     def set_progress_callback(self, callback):
@@ -73,7 +74,7 @@ class TrackDownloader:
                 base_url,
                 params=request_params,
                 headers=headers,
-                timeout=30
+                timeout=self.timeout
             )
             
             html_content = response.text
@@ -294,7 +295,7 @@ async def main():
     
     output_dir = "."
     track_id = "2plbrEY59IikOBgBGLjaoe"
-    service = "amazon"
+    service = "tidal"
     
     def progress_update(current, total):
         if total > 0:

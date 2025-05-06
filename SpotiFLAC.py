@@ -55,7 +55,7 @@ class DownloadWorker(QThread):
     
     def __init__(self, tracks, outpath, is_single_track=False, is_album=False, is_playlist=False, 
                  album_or_playlist_name='', filename_format='title_artist', use_track_numbers=True,
-                 use_album_subfolders=False, use_fallback=False, service="amazon"):
+                 use_album_subfolders=False, use_fallback=False, service="amazon", timeout=30):
         super().__init__()
         self.tracks = tracks
         self.outpath = outpath
@@ -68,6 +68,7 @@ class DownloadWorker(QThread):
         self.use_album_subfolders = use_album_subfolders
         self.use_fallback = use_fallback
         self.service = service
+        self.timeout = timeout
         self.is_paused = False
         self.is_stopped = False
         self.failed_tracks = []
@@ -81,7 +82,7 @@ class DownloadWorker(QThread):
 
     def run(self):
         try:
-            downloader = TrackDownloader(self.use_fallback)
+            downloader = TrackDownloader(self.use_fallback, self.timeout)
             
             def progress_update(current, total):
                 if total > 0:
@@ -330,7 +331,7 @@ class ServiceComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "2.5"
+        self.current_version = "2.6"
         self.tracks = []
         self.reset_state()
         
@@ -343,6 +344,7 @@ class SpotiFLACGUI(QWidget):
         self.use_album_subfolders = self.settings.value('use_album_subfolders', False, type=bool)
         self.use_fallback = self.settings.value('use_fallback', False, type=bool)
         self.service = self.settings.value('service', 'amazon')
+        self.timeout_value = self.settings.value('timeout_value', 30, type=int)
         self.check_for_updates = self.settings.value('check_for_updates', True, type=bool)
         
         self.elapsed_time = QTime(0, 0, 0)
@@ -586,7 +588,7 @@ class SpotiFLACGUI(QWidget):
         output_layout.setSpacing(5)
         
         output_label = QLabel('Output Directory')
-        output_label.setStyleSheet("font-weight: bold; color: palette(text);")
+        output_label.setStyleSheet("font-weight: bold;")
         output_layout.addWidget(output_label)
         
         output_dir_layout = QHBoxLayout()
@@ -609,21 +611,18 @@ class SpotiFLACGUI(QWidget):
         file_layout.setSpacing(5)
         
         file_label = QLabel('File Settings')
-        file_label.setStyleSheet("font-weight: bold; color: palette(text);")
+        file_label.setStyleSheet("font-weight: bold;")
         file_layout.addWidget(file_label)
         
         format_layout = QHBoxLayout()
         format_label = QLabel('Filename Format:')
-        format_label.setStyleSheet("color: palette(text);")
         
         self.format_group = QButtonGroup(self)
         self.title_artist_radio = QRadioButton('Title - Artist')
-        self.title_artist_radio.setStyleSheet("color: palette(text);")
         self.title_artist_radio.setCursor(Qt.CursorShape.PointingHandCursor)
         self.title_artist_radio.toggled.connect(self.save_filename_format)
         
         self.artist_title_radio = QRadioButton('Artist - Title')
-        self.artist_title_radio.setStyleSheet("color: palette(text);")
         self.artist_title_radio.setCursor(Qt.CursorShape.PointingHandCursor)
         self.artist_title_radio.toggled.connect(self.save_filename_format)
         
@@ -644,14 +643,12 @@ class SpotiFLACGUI(QWidget):
         checkbox_layout = QHBoxLayout()
         
         self.track_number_checkbox = QCheckBox('Add Track Numbers to Album Files')
-        self.track_number_checkbox.setStyleSheet("color: palette(text);")
         self.track_number_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
         self.track_number_checkbox.setChecked(self.use_track_numbers)
         self.track_number_checkbox.toggled.connect(self.save_track_numbering)
         checkbox_layout.addWidget(self.track_number_checkbox)
         
         self.album_subfolder_checkbox = QCheckBox('Create Album Subfolders for Playlist Downloads')
-        self.album_subfolder_checkbox.setStyleSheet("color: palette(text);")
         self.album_subfolder_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
         self.album_subfolder_checkbox.setChecked(self.use_album_subfolders)
         self.album_subfolder_checkbox.toggled.connect(self.save_album_subfolder_setting)
@@ -666,14 +663,13 @@ class SpotiFLACGUI(QWidget):
         auth_layout = QVBoxLayout(auth_group)
         auth_layout.setSpacing(5)
         
-        auth_label = QLabel('Lucida')
-        auth_label.setStyleSheet("font-weight: bold; color: palette(text);")
+        auth_label = QLabel('Lucida Settings')
+        auth_label.setStyleSheet("font-weight: bold;")
         auth_layout.addWidget(auth_label)
 
         service_fallback_layout = QHBoxLayout()
 
         service_label = QLabel('Service:')
-        service_label.setStyleSheet("color: palette(text);")
         
         self.service_dropdown = ServiceComboBox()
         self.service_dropdown.currentIndexChanged.connect(self.save_service_setting)
@@ -684,11 +680,20 @@ class SpotiFLACGUI(QWidget):
         service_fallback_layout.addSpacing(20)
         
         self.fallback_checkbox = QCheckBox('Fallback')
-        self.fallback_checkbox.setStyleSheet("color: palette(text);")
         self.fallback_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fallback_checkbox.setChecked(self.use_fallback)
         self.fallback_checkbox.toggled.connect(self.save_fallback_setting)
         service_fallback_layout.addWidget(self.fallback_checkbox)
+        
+        service_fallback_layout.addSpacing(20)
+        
+        timeout_label = QLabel('Timeout:')
+        self.timeout_input = QLineEdit()
+        self.timeout_input.setText(str(self.timeout_value))
+        self.timeout_input.setFixedWidth(60)
+        self.timeout_input.textChanged.connect(self.save_timeout_setting)
+        service_fallback_layout.addWidget(timeout_label)
+        service_fallback_layout.addWidget(self.timeout_input)
         
         service_fallback_layout.addStretch()
         auth_layout.addLayout(service_fallback_layout)
@@ -749,8 +754,8 @@ class SpotiFLACGUI(QWidget):
                 spacer = QSpacerItem(20, 6, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 about_layout.addItem(spacer)
 
-        footer_label = QLabel("v2.5 | April 2025")
-        footer_label.setStyleSheet("font-size: 12px; color: palette(text); margin-top: 10px;")
+        footer_label = QLabel("v2.6 | May 2025")
+        footer_label.setStyleSheet("font-size: 12px; margin-top: 10px;")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
         about_tab.setLayout(about_layout)
@@ -780,6 +785,21 @@ class SpotiFLACGUI(QWidget):
         self.settings.setValue('use_fallback', self.use_fallback)
         self.settings.sync()
         self.log_output.append("Fallback setting saved successfully!")
+    
+    def save_timeout_setting(self):
+        try:
+            timeout = int(self.timeout_input.text())
+            if timeout > 0:
+                self.timeout_value = timeout
+                self.settings.setValue('timeout_value', self.timeout_value)
+                self.settings.sync()
+                self.log_output.append(f"Timeout setting saved: {self.timeout_value} seconds")
+            else:
+                self.timeout_input.setText(str(self.timeout_value))
+                self.log_output.append("Timeout must be a positive number")
+        except ValueError:
+            self.timeout_input.setText(str(self.timeout_value))
+            self.log_output.append("Timeout must be a valid number")
     
     def save_service_setting(self):
         service = self.service_dropdown.currentData()
@@ -1075,7 +1095,8 @@ class SpotiFLACGUI(QWidget):
             self.use_track_numbers,
             self.use_album_subfolders,
             self.use_fallback,
-            service
+            service,
+            self.timeout_value
         )
         self.worker.finished.connect(self.on_download_finished)
         self.worker.progress.connect(self.update_progress)
