@@ -11,7 +11,7 @@
 #
 
 > [!Note] 
-**Download speed** from Lucida is unpredictable—sometimes fast, sometimes slow. Join their **Discord** for updates.
+**Download speed** from Lucida is unpredictable—sometimes fast, sometimes slow. Join their [Discord](https://discord.com/invite/dXEGRWqEbS) for updates.
 
 ## Screenshots
 
