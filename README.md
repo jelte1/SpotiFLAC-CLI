@@ -21,8 +21,6 @@ Sometimes, the **download speed** from Lucida can be fast or slow; it varies unp
 
 ![image](https://github.com/user-attachments/assets/be9a79b5-260e-4948-9f72-10c735210ab7)
 
-![image](https://github.com/user-attachments/assets/c4403934-9003-447e-a27b-fc74cab23454)
-
 ![image](https://github.com/user-attachments/assets/1feec621-f8bf-4b2a-ae73-afcb1fb1deba)
 
 ![image](https://github.com/user-attachments/assets/66cc3398-547d-4568-8d49-a05ad4997370)
