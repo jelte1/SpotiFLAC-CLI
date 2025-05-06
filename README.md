@@ -1,6 +1,6 @@
 [![GitHub All Releases](https://img.shields.io/github/downloads/afkarxyz/SpotiFLAC/total?style=for-the-badge)](https://github.com/afkarxyz/SpotiFLAC/releases)
 
-![spotiflac](https://github.com/user-attachments/assets/a233a276-14a4-4f4c-b267-f182dd3912a0)
+![SpotiFLAC](https://github.com/user-attachments/assets/b4c4f403-edbd-4a71-b74b-c7d433d47d06)
 
 <div align="center">
 <b>SpotiFLAC</b> allows you to download Spotify tracks in true FLAC format through services like Tidal, Amazon Music and Deezer with the help of Lucida.
@@ -15,15 +15,17 @@ Sometimes, the **download speed** from Lucida can be fast or slow; it varies unp
 
 ## Screenshots
 
-![image](https://github.com/user-attachments/assets/611b8b52-6615-44fe-b6f8-905c07801c47)
+![image](https://github.com/user-attachments/assets/70a5dceb-3374-4255-8f6a-4afb5ee534b0)
 
-![image](https://github.com/user-attachments/assets/81e65977-11f0-4162-96f3-90730dd87e74)
+![image](https://github.com/user-attachments/assets/9f0d6aa5-456b-4a90-b48a-7e0c22819ebd)
 
-![image](https://github.com/user-attachments/assets/4dd37c0a-30e3-479a-9b3d-57fd360d87b3)
+![image](https://github.com/user-attachments/assets/be9a79b5-260e-4948-9f72-10c735210ab7)
 
-![image](https://github.com/user-attachments/assets/66f1ae70-e049-4b4c-ba81-1df5054d0e7d)
+![image](https://github.com/user-attachments/assets/c4403934-9003-447e-a27b-fc74cab23454)
 
-![image](https://github.com/user-attachments/assets/04954db9-e94a-4f9d-8eac-46d7ff7a4c33)
+![image](https://github.com/user-attachments/assets/1feec621-f8bf-4b2a-ae73-afcb1fb1deba)
+
+![image](https://github.com/user-attachments/assets/66cc3398-547d-4568-8d49-a05ad4997370)
 
 > When **Fallback** is enabled, it will use the backup server `Lucida.su`
 
