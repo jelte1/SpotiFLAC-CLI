@@ -10,8 +10,8 @@
 
 #
 
-> [!WARNING] 
-Download speed from Lucida is unpredictable—sometimes fast, sometimes slow. Join their Discord for updates.
+> [!Note] 
+**Download speed** from Lucida is unpredictable—sometimes fast, sometimes slow. Join their **Discord** for updates.
 
 ## Screenshots
 
