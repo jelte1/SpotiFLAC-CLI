@@ -23,7 +23,7 @@
 
 ![image](https://github.com/user-attachments/assets/1feec621-f8bf-4b2a-ae73-afcb1fb1deba)
 
-![image](https://github.com/user-attachments/assets/66cc3398-547d-4568-8d49-a05ad4997370)
+![image](https://github.com/user-attachments/assets/e535592a-83da-4b7e-8c4b-dac10884ed4e)
 
 > When **Fallback** is enabled, it will use the backup server `Lucida.su`
 
