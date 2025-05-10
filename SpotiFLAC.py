@@ -5,19 +5,21 @@ from datetime import datetime
 import requests
 import re
 from packaging import version
+import json
 
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
     QLabel, QFileDialog, QListWidget, QTextEdit, QTabWidget, QButtonGroup, QRadioButton,
     QAbstractItemView, QSpacerItem, QSizePolicy, QProgressBar, QCheckBox, QDialog,
-    QDialogButtonBox, QComboBox, QStyledItemDelegate, QStyle
+    QDialogButtonBox, QComboBox, QStyledItemDelegate
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl, QTimer, QTime, QSettings, QSize
-from PyQt6.QtGui import QIcon, QTextCursor, QDesktopServices, QPixmap, QBrush, QPalette
+from PyQt6.QtGui import QIcon, QTextCursor, QDesktopServices, QPixmap, QBrush
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 from getMetadata import get_filtered_data, parse_uri, SpotifyInvalidUrlException
 from getTracks import TrackDownloader
+import SquidWTF
 
 @dataclass
 class Track:
@@ -120,34 +122,138 @@ class DownloadWorker(QThread):
                     else:
                         track_outpath = self.outpath
                     
-                    import asyncio
-                    metadata = asyncio.run(downloader.get_track_info(track_id, self.service))
-                    
-                    self.progress.emit(f"Track info received, starting download process", 0)
-                    
-                    is_paused_callback = lambda: self.is_paused
-                    is_stopped_callback = lambda: self.is_stopped
-                    
-                    downloaded_file = downloader.download(
-                        metadata, 
-                        track_outpath,
-                        is_paused_callback=is_paused_callback,
-                        is_stopped_callback=is_stopped_callback
-                    )
-                    
-                    if (self.is_album or (self.is_playlist and self.use_album_subfolders)) and self.use_track_numbers:
-                        new_filename = f"{track.track_number:02d} - {self.get_formatted_filename(track)}"
+                    if self.service == "qobuz":
+                        self.progress.emit(f"Getting track metadata for: {track.title} - {track.artists}", 0)
+                        
+                        isrc = None
+                        
+                        try:
+                            from getMetadata import get_raw_spotify_data, parse_uri
+                            
+                            track_url = track.external_urls
+                            
+                            self.progress.emit(f"Fetching Spotify metadata for ISRC...", 0)
+                            raw_data = get_raw_spotify_data(track_url)
+                            
+                            if raw_data and "external_ids" in raw_data and "isrc" in raw_data["external_ids"]:
+                                isrc = raw_data["external_ids"]["isrc"]
+                                self.progress.emit(f"Found ISRC from Spotify: {isrc}", 0)
+                        except Exception as e:
+                            self.progress.emit(f"Could not get ISRC from Spotify raw data: {str(e)}", 0)
+                        
+                        if not isrc:
+                            self.progress.emit(f"No ISRC found, searching by title and artist", 0)
+                            search_query = f"{track.title} {track.artists}"
+                            
+                            try:
+                                self.progress.emit(f"Searching Qobuz for: {search_query}", 0)
+                                
+                                qobuz_track_info = SquidWTF.search_track(track.title, track.artists, strict_match=True)
+                                
+                                if qobuz_track_info:
+                                    qobuz_track_id = qobuz_track_info["id"]
+                                    self.progress.emit(f"Found track on Qobuz by title search: {qobuz_track_info['title']} - {qobuz_track_info['performer']['name']}", 0)
+                                    
+                                    found_artist = qobuz_track_info['performer']['name'].lower()
+                                    expected_artist = track.artists.lower()
+                                    
+                                    if expected_artist not in found_artist and found_artist not in expected_artist:
+                                        self.progress.emit(f"Warning: Artist mismatch! Expected: {track.artists}, Found: {qobuz_track_info['performer']['name']}", 0)
+                                        raise Exception(f"Artist mismatch: Expected '{track.artists}', found '{qobuz_track_info['performer']['name']}'")
+                                else:
+                                    raise Exception(f"Could not find track on Qobuz: {track.title} - {track.artists}")
+                            except Exception as e:
+                                self.progress.emit(f"Search by title failed: {str(e)}", 0)
+                                raise Exception(f"Could not find track on Qobuz: {track.title} - {track.artists}")
+                        else:
+                            self.progress.emit(f"Searching Qobuz with ISRC: {isrc}", 0)
+                            qobuz_track_info = SquidWTF.get_track_info(isrc)
+                            qobuz_track_id = qobuz_track_info["id"]
+                            self.progress.emit(f"Found track on Qobuz: {qobuz_track_info['title']} - {qobuz_track_info['performer']['name']}", 0)
+                            
+                            found_artist = qobuz_track_info['performer']['name'].lower()
+                            expected_artist = track.artists.lower()
+                            
+                            if expected_artist not in found_artist and found_artist not in expected_artist:
+                                self.progress.emit(f"Warning: Artist mismatch! Expected: {track.artists}, Found: {qobuz_track_info['performer']['name']}", 0)
+                        
+                        download_url = SquidWTF.get_download_url(qobuz_track_id)
+                        
+                        os.makedirs(track_outpath, exist_ok=True)
+                        
+                        temp_filename = os.path.join(track_outpath, f"temp_{qobuz_track_id}.flac")
+                        
+                        self.progress.emit(f"Downloading from Qobuz...", 0)
+                        
+                        def progress_callback(current, total):
+                            if total > 0:
+                                percent = (current / total) * 100
+                                current_mb = current / (1024 * 1024)
+                                total_mb = total / (1024 * 1024)
+                                self.progress.emit(f"Download progress: {percent:.2f}% ({current_mb:.2f}MB/{total_mb:.2f}MB)", 
+                                                int(percent))
+                        
+                        try:
+                            SquidWTF.download_file(download_url, temp_filename, progress_callback)
+                            
+                            if not os.path.exists(temp_filename) or os.path.getsize(temp_filename) == 0:
+                                raise Exception(f"Downloaded file is empty or does not exist: {temp_filename}")
+                            
+                            self.progress.emit(f"Embedding metadata...", 0)
+                            SquidWTF.embed_metadata(temp_filename, qobuz_track_info)
+                            
+                            if (self.is_album or (self.is_playlist and self.use_album_subfolders)) and self.use_track_numbers:
+                                new_filename = f"{track.track_number:02d} - {self.get_formatted_filename(track)}"
+                            else:
+                                new_filename = self.get_formatted_filename(track)
+                            
+                            new_filename = re.sub(r'[<>:"/\\|?*]', '_', new_filename)
+                            new_filepath = os.path.join(track_outpath, new_filename)
+                            
+                            if os.path.exists(new_filepath):
+                                os.remove(new_filepath)
+                            os.rename(temp_filename, new_filepath)
+                            
+                            downloaded_file = new_filepath
+                            self.progress.emit(f"File renamed to: {new_filename}", 0)
+                        except Exception as e:
+                            self.progress.emit(f"Error during download or processing: {str(e)}", 0)
+                            if os.path.exists(temp_filename):
+                                try:
+                                    os.remove(temp_filename)
+                                    self.progress.emit(f"Removed incomplete download file", 0)
+                                except:
+                                    pass
+                            raise Exception(f"Failed to download or process file: {str(e)}")
                     else:
-                        new_filename = self.get_formatted_filename(track)
-                    
-                    new_filename = re.sub(r'[<>:"/\\|?*]', '_', new_filename)
-                    new_filepath = os.path.join(track_outpath, new_filename)
-                    
-                    if os.path.exists(downloaded_file) and downloaded_file != new_filepath:
-                        if os.path.exists(new_filepath):
-                            os.remove(new_filepath)
-                        os.rename(downloaded_file, new_filepath)
-                        self.progress.emit(f"File renamed to: {new_filename}", 0)
+                        import asyncio
+                        metadata = asyncio.run(downloader.get_track_info(track_id, self.service))
+                        
+                        self.progress.emit(f"Track info received, starting download process", 0)
+                        
+                        is_paused_callback = lambda: self.is_paused
+                        is_stopped_callback = lambda: self.is_stopped
+                        
+                        downloaded_file = downloader.download(
+                            metadata, 
+                            track_outpath,
+                            is_paused_callback=is_paused_callback,
+                            is_stopped_callback=is_stopped_callback
+                        )
+                        
+                        if (self.is_album or (self.is_playlist and self.use_album_subfolders)) and self.use_track_numbers:
+                            new_filename = f"{track.track_number:02d} - {self.get_formatted_filename(track)}"
+                        else:
+                            new_filename = self.get_formatted_filename(track)
+                        
+                        new_filename = re.sub(r'[<>:"/\\|?*]', '_', new_filename)
+                        new_filepath = os.path.join(track_outpath, new_filename)
+                        
+                        if os.path.exists(downloaded_file) and downloaded_file != new_filepath:
+                            if os.path.exists(new_filepath):
+                                os.remove(new_filepath)
+                            os.rename(downloaded_file, new_filepath)
+                            self.progress.emit(f"File renamed to: {new_filename}", 0)
                     
                     self.progress.emit(f"Successfully downloaded: {track.title} - {track.artists}", 
                                     int((i + 1) / total_tracks * 100))
@@ -218,23 +324,48 @@ class ServiceStatusChecker(QThread):
     error = pyqtSignal(str)
     
     def run(self):
+        services_status = {
+            'amazon': False,
+            'tidal': False,
+            'deezer': False,
+            'qobuz': False
+        }
+        
         try:
             response = requests.get("https://lucida.to/api/stats", timeout=5)
             if response.status_code == 200:
-                data = response.json()
-                services_status = {}
-                
-                current_services = data.get('all', {}).get('downloads', {}).get('current', {}).get('services', {})
-                
-                services_status['amazon'] = current_services.get('amazon', 0) > 0
-                services_status['tidal'] = current_services.get('tidal', 0) > 0
-                services_status['deezer'] = current_services.get('deezer', 0) > 0
-                
-                self.status_updated.emit(services_status)
+                try:
+                    data = response.json()
+                    current_services = data.get('all', {}).get('downloads', {}).get('current', {}).get('services', {})
+                    
+                    services_status['amazon'] = current_services.get('amazon', 0) > 0
+                    services_status['tidal'] = current_services.get('tidal', 0) > 0
+                    services_status['deezer'] = current_services.get('deezer', 0) > 0
+                    
+                    print("Lucida services status check successful")
+                except json.JSONDecodeError as e:
+                    print(f"Lucida API returned invalid JSON: {e}")
+                except Exception as e:
+                    print(f"Error processing Lucida API response: {str(e)}")
             else:
-                self.error.emit(f"Server returned status code: {response.status_code}")
+                print(f"Lucida API returned status code: {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            print(f"Error connecting to Lucida API: {str(e)}")
         except Exception as e:
-            self.error.emit(f"Error checking service status: {str(e)}")
+            print(f"Unexpected error checking Lucida services: {str(e)}")
+        
+        try:
+            qobuz_response = requests.get("https://us.qobuz.squid.wtf", timeout=5)
+            services_status['qobuz'] = qobuz_response.status_code in [200, 304]
+            print(f"SquidWTF (Qobuz) status check: {qobuz_response.status_code} - {'Online' if services_status['qobuz'] else 'Offline'}")
+        except requests.exceptions.RequestException as e:
+            print(f"Error connecting to SquidWTF API (Qobuz): {str(e)}")
+            services_status['qobuz'] = False
+        except Exception as e:
+            print(f"Unexpected error checking SquidWTF (Qobuz): {str(e)}")
+            services_status['qobuz'] = False
+        
+        self.status_updated.emit(services_status)
 
 class StatusIndicatorDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
@@ -242,11 +373,6 @@ class StatusIndicatorDelegate(QStyledItemDelegate):
         is_online = item_data.get('online', False) if item_data else False
         
         super().paint(painter, option, index)
-        
-        if option.state & QStyle.StateFlag.State_Selected:
-            text_color = option.palette.color(QPalette.ColorGroup.Active, QPalette.ColorRole.HighlightedText)
-        else:
-            text_color = option.palette.color(QPalette.ColorGroup.Active, QPalette.ColorRole.Text)
         
         indicator_color = Qt.GlobalColor.green if is_online else Qt.GlobalColor.red
         
@@ -285,7 +411,8 @@ class ServiceComboBox(QComboBox):
         self.services = [
             {'id': 'tidal', 'name': 'Tidal', 'icon': 'tidal.png', 'online': False},
             {'id': 'amazon', 'name': 'Amazon Music', 'icon': 'amazon.png', 'online': False},
-            {'id': 'deezer', 'name': 'Deezer', 'icon': 'deezer.png', 'online': False}
+            {'id': 'deezer', 'name': 'Deezer', 'icon': 'deezer.png', 'online': False},
+            {'id': 'qobuz', 'name': 'Qobuz', 'icon': 'qobuz.png', 'online': False}
         ]
         
         for service in self.services:
@@ -331,7 +458,7 @@ class ServiceComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "2.6"
+        self.current_version = "2.7"
         self.tracks = []
         self.reset_state()
         
@@ -419,6 +546,7 @@ class SpotiFLACGUI(QWidget):
         self.setup_tabs()
         
         self.setLayout(self.main_layout)
+        QTimer.singleShot(0, self.update_service_ui_visibility)
 
     def setup_spotify_section(self):
         spotify_layout = QHBoxLayout()
@@ -663,47 +791,67 @@ class SpotiFLACGUI(QWidget):
         auth_layout = QVBoxLayout(auth_group)
         auth_layout.setSpacing(5)
         
-        auth_label = QLabel('Lucida Settings')
+        auth_label = QLabel('Service Setting')
         auth_label.setStyleSheet("font-weight: bold;")
         auth_layout.addWidget(auth_label)
 
-        service_fallback_layout = QHBoxLayout()
+        source_fallback_layout = QHBoxLayout()
 
-        service_label = QLabel('Service:')
+        service_label = QLabel('Source:')
         
         self.service_dropdown = ServiceComboBox()
         self.service_dropdown.currentIndexChanged.connect(self.save_service_setting)
         
-        service_fallback_layout.addWidget(service_label)
-        service_fallback_layout.addWidget(self.service_dropdown)
+        saved_service = self.service
+        for i in range(self.service_dropdown.count()):
+            if self.service_dropdown.itemData(i, Qt.ItemDataRole.UserRole + 1) == saved_service:
+                self.service_dropdown.setCurrentIndex(i)
+                break
         
-        service_fallback_layout.addSpacing(20)
+        source_fallback_layout.addWidget(service_label)
+        source_fallback_layout.addWidget(self.service_dropdown)
+        
+        source_fallback_layout.addSpacing(20)
         
         self.fallback_checkbox = QCheckBox('Fallback')
         self.fallback_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fallback_checkbox.setChecked(self.use_fallback)
         self.fallback_checkbox.toggled.connect(self.save_fallback_setting)
-        service_fallback_layout.addWidget(self.fallback_checkbox)
+        source_fallback_layout.addWidget(self.fallback_checkbox)
         
-        service_fallback_layout.addSpacing(20)
+        source_fallback_layout.addSpacing(20)
         
         timeout_label = QLabel('Timeout:')
+        self.timeout_label = timeout_label
         self.timeout_input = QLineEdit()
         self.timeout_input.setText(str(self.timeout_value))
         self.timeout_input.setFixedWidth(60)
         self.timeout_input.textChanged.connect(self.save_timeout_setting)
-        service_fallback_layout.addWidget(timeout_label)
-        service_fallback_layout.addWidget(self.timeout_input)
-        
-        service_fallback_layout.addStretch()
-        auth_layout.addLayout(service_fallback_layout)
+        source_fallback_layout.addWidget(timeout_label)
+        source_fallback_layout.addWidget(self.timeout_input)
+
+        source_fallback_layout.addStretch()
+        auth_layout.addLayout(source_fallback_layout)
         
         settings_layout.addWidget(auth_group)
 
         settings_layout.addStretch()
         settings_tab.setLayout(settings_layout)
         self.tab_widget.addTab(settings_tab, "Settings")
-        
+    
+    def update_service_ui_visibility(self):
+        if hasattr(self, 'fallback_checkbox') and hasattr(self, 'timeout_input') and hasattr(self, 'timeout_label'):
+            service = self.service_dropdown.currentData() if hasattr(self, 'service_dropdown') else self.service
+            
+            if service == "qobuz":
+                self.fallback_checkbox.setVisible(False)
+                self.timeout_input.setVisible(False)
+                self.timeout_label.setVisible(False)
+            else:
+                self.fallback_checkbox.setVisible(True)
+                self.timeout_input.setVisible(True)
+                self.timeout_label.setVisible(True)
+    
     def setup_about_tab(self):
         about_tab = QWidget()
         about_layout = QVBoxLayout()
@@ -754,7 +902,7 @@ class SpotiFLACGUI(QWidget):
                 spacer = QSpacerItem(20, 6, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 about_layout.addItem(spacer)
 
-        footer_label = QLabel("v2.6 | May 2025")
+        footer_label = QLabel("v2.7 | May 2025")
         footer_label.setStyleSheet("font-size: 12px; margin-top: 10px;")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -807,6 +955,8 @@ class SpotiFLACGUI(QWidget):
         self.settings.setValue('service', service)
         self.settings.sync()
         self.log_output.append(f"Service setting saved: {self.service_dropdown.currentText()}")
+        
+        self.update_service_ui_visibility()
     
     def save_settings(self):
         self.settings.setValue('output_path', self.output_dir.text().strip())
