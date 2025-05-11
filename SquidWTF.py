@@ -4,9 +4,10 @@ from datetime import datetime
 import sys
 import os
 
-def get_track_info(isrc):
+def get_track_info(isrc, region="us"):
     print(f"Search: {isrc}")
-    url = f"https://us.qobuz.squid.wtf/api/get-music?q={isrc}&offset=0"
+    base_url = f"https://{region}.qobuz.squid.wtf"
+    url = f"{base_url}/api/get-music?q={isrc}&offset=0"
     response = requests.get(url)
     data = response.json()
     
@@ -31,12 +32,13 @@ def get_track_info(isrc):
     print(f"Found: {track['title']} - {track['performer']['name']}")
     return track
 
-def search_track(title, artist, strict_match=False):
+def search_track(title, artist, strict_match=False, region="us"):
     print(f"Search by title/artist: {title} - {artist}")
     
     search_query = f"{title} {artist}".replace("feat.", "").replace("ft.", "")
     
-    url = f"https://us.qobuz.squid.wtf/api/get-music?q={search_query}&offset=0"
+    base_url = f"https://{region}.qobuz.squid.wtf"
+    url = f"{base_url}/api/get-music?q={search_query}&offset=0"
     response = requests.get(url)
     data = response.json()
     
@@ -88,8 +90,9 @@ def search_track(title, artist, strict_match=False):
     print(f"Found by title search: {best_match['title']} - {best_match['performer']['name']}")
     return best_match
 
-def get_download_url(track_id):
-    url = f"https://us.qobuz.squid.wtf/api/download-music?track_id={track_id}&quality=27"
+def get_download_url(track_id, region="us"):
+    base_url = f"https://{region}.qobuz.squid.wtf"
+    url = f"{base_url}/api/download-music?track_id={track_id}&quality=27"
     response = requests.get(url)
     data = response.json()
     
@@ -204,14 +207,15 @@ def download_cover_image(url):
 def main():
     try:
         isrc = "USUM72409273"
+        region = "us"
         
-        track_info = get_track_info(isrc)
+        track_info = get_track_info(isrc, region)
         track_id = track_info["id"]
         
         if track_info["isrc"] != isrc:
             raise Exception(f"ISRC mismatch: {track_info['isrc']} != {isrc}")
         
-        download_url = get_download_url(track_id)
+        download_url = get_download_url(track_id, region)
         
         filename = f"{track_info['title']} - {track_info['performer']['name']}.flac"
         filename = filename.replace('/', '_').replace('\\', '_')

@@ -57,7 +57,8 @@ class DownloadWorker(QThread):
     
     def __init__(self, tracks, outpath, is_single_track=False, is_album=False, is_playlist=False, 
                  album_or_playlist_name='', filename_format='title_artist', use_track_numbers=True,
-                 use_album_subfolders=False, use_fallback=False, service="amazon", timeout=30):
+                 use_album_subfolders=False, use_fallback=False, service="amazon", timeout=30,
+                 qobuz_region="us"):
         super().__init__()
         self.tracks = tracks
         self.outpath = outpath
@@ -71,6 +72,7 @@ class DownloadWorker(QThread):
         self.use_fallback = use_fallback
         self.service = service
         self.timeout = timeout
+        self.qobuz_region = qobuz_region
         self.is_paused = False
         self.is_stopped = False
         self.failed_tracks = []
@@ -148,7 +150,7 @@ class DownloadWorker(QThread):
                             try:
                                 self.progress.emit(f"Searching Qobuz for: {search_query}", 0)
                                 
-                                qobuz_track_info = SquidWTF.search_track(track.title, track.artists, strict_match=True)
+                                qobuz_track_info = SquidWTF.search_track(track.title, track.artists, strict_match=True, region=self.qobuz_region)
                                 
                                 if qobuz_track_info:
                                     qobuz_track_id = qobuz_track_info["id"]
@@ -167,7 +169,7 @@ class DownloadWorker(QThread):
                                 raise Exception(f"Could not find track on Qobuz: {track.title} - {track.artists}")
                         else:
                             self.progress.emit(f"Searching Qobuz with ISRC: {isrc}", 0)
-                            qobuz_track_info = SquidWTF.get_track_info(isrc)
+                            qobuz_track_info = SquidWTF.get_track_info(isrc, region=self.qobuz_region)
                             qobuz_track_id = qobuz_track_info["id"]
                             self.progress.emit(f"Found track on Qobuz: {qobuz_track_info['title']} - {qobuz_track_info['performer']['name']}", 0)
                             
@@ -177,7 +179,7 @@ class DownloadWorker(QThread):
                             if expected_artist not in found_artist and found_artist not in expected_artist:
                                 self.progress.emit(f"Warning: Artist mismatch! Expected: {track.artists}, Found: {qobuz_track_info['performer']['name']}", 0)
                         
-                        download_url = SquidWTF.get_download_url(qobuz_track_id)
+                        download_url = SquidWTF.get_download_url(qobuz_track_id, region=self.qobuz_region)
                         
                         os.makedirs(track_outpath, exist_ok=True)
                         
@@ -354,16 +356,24 @@ class ServiceStatusChecker(QThread):
         except Exception as e:
             print(f"Unexpected error checking Lucida services: {str(e)}")
         
+        eu_online = False
+        us_online = False
+
         try:
-            qobuz_response = requests.get("https://us.qobuz.squid.wtf", timeout=5)
-            services_status['qobuz'] = qobuz_response.status_code in [200, 304]
-            print(f"SquidWTF (Qobuz) status check: {qobuz_response.status_code} - {'Online' if services_status['qobuz'] else 'Offline'}")
-        except requests.exceptions.RequestException as e:
-            print(f"Error connecting to SquidWTF API (Qobuz): {str(e)}")
-            services_status['qobuz'] = False
+            eu_response = requests.get("https://eu.qobuz.squid.wtf", timeout=5)
+            eu_online = eu_response.status_code in [200, 304]
+            print(f"SquidWTF (Qobuz EU) status check: {eu_response.status_code} - {'Online' if eu_online else 'Offline'}")
         except Exception as e:
-            print(f"Unexpected error checking SquidWTF (Qobuz): {str(e)}")
-            services_status['qobuz'] = False
+            print(f"Error checking EU Qobuz region: {str(e)}")
+
+        try:
+            us_response = requests.get("https://us.qobuz.squid.wtf", timeout=5)
+            us_online = us_response.status_code in [200, 304]
+            print(f"SquidWTF (Qobuz US) status check: {us_response.status_code} - {'Online' if us_online else 'Offline'}")
+        except Exception as e:
+            print(f"Error checking US Qobuz region: {str(e)}")
+
+        services_status['qobuz'] = eu_online or us_online
         
         self.status_updated.emit(services_status)
 
@@ -374,6 +384,9 @@ class StatusIndicatorDelegate(QStyledItemDelegate):
         
         super().paint(painter, option, index)
         
+        if item_data and item_data.get('online') is None:
+            return
+          
         indicator_color = Qt.GlobalColor.green if is_online else Qt.GlobalColor.red
         
         circle_size = 6
@@ -455,10 +468,93 @@ class ServiceComboBox(QComboBox):
     def currentData(self, role=Qt.ItemDataRole.UserRole + 1):
         return super().currentData(role)
         
+class QobuzRegionComboBox(QComboBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setIconSize(QSize(16, 16))
+        self.regions_status = {}
+        
+        self.setItemDelegate(StatusIndicatorDelegate())
+        
+        self.setup_items()
+        
+        self.status_checker = QThread()
+        self.status_checker.run = self.check_status
+        self.status_checker.finished.connect(self.update_region_status)
+        self.status_checker.start()
+        
+        self.status_timer = QTimer(self)
+        self.status_timer.timeout.connect(self.refresh_status)
+        self.status_timer.start(5000)
+        
+    def setup_items(self):
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        self.regions = [
+            {'id': 'eu', 'name': 'Europe', 'icon': 'eu.svg', 'online': False, 'url': 'https://eu.qobuz.squid.wtf'},
+            {'id': 'us', 'name': 'North America', 'icon': 'us.svg', 'online': False, 'url': 'https://us.qobuz.squid.wtf'}
+        ]
+        
+        for region in self.regions:
+            icon_path = os.path.join(current_dir, region['icon'])
+            if not os.path.exists(icon_path):
+                self.create_placeholder_icon(icon_path)
+            
+            icon = QIcon(icon_path)
+            
+            self.addItem(icon, region['name'])
+            item_index = self.count() - 1
+            self.setItemData(item_index, region['id'], Qt.ItemDataRole.UserRole + 1)
+            self.setItemData(item_index, region, Qt.ItemDataRole.UserRole)
+      
+      
+    def create_placeholder_icon(self, path):
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        pixmap.save(path)
+      
+    def check_status(self):
+        regions_status = {}
+        
+        for region in self.regions:
+            try:
+                response = requests.get(region['url'], timeout=5)
+                regions_status[region['id']] = response.status_code in [200, 304]
+                print(f"SquidWTF ({region['name']}) status check: {response.status_code} - {'Online' if regions_status[region['id']] else 'Offline'}")
+            except requests.exceptions.RequestException as e:
+                print(f"Error connecting to SquidWTF API ({region['name']}): {str(e)}")
+                regions_status[region['id']] = False
+            except Exception as e:
+                print(f"Unexpected error checking SquidWTF ({region['name']}): {str(e)}")
+                regions_status[region['id']] = False
+          
+        self.regions_status = regions_status
+      
+    def update_region_status(self):
+        for i in range(self.count()):
+            region_id = self.itemData(i, Qt.ItemDataRole.UserRole + 1)
+            
+            if region_id in self.regions_status:
+                region_data = self.itemData(i, Qt.ItemDataRole.UserRole)
+                if isinstance(region_data, dict):
+                    region_data['online'] = self.regions_status[region_id]
+                    self.setItemData(i, region_data, Qt.ItemDataRole.UserRole)
+          
+        self.update()
+      
+    def refresh_status(self):
+        self.status_checker = QThread()
+        self.status_checker.run = self.check_status
+        self.status_checker.finished.connect(self.update_region_status)
+        self.status_checker.start()
+      
+    def currentData(self, role=Qt.ItemDataRole.UserRole + 1):
+        return super().currentData(role)
+        
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "2.7"
+        self.current_version = "2.8"
         self.tracks = []
         self.reset_state()
         
@@ -471,6 +567,7 @@ class SpotiFLACGUI(QWidget):
         self.use_album_subfolders = self.settings.value('use_album_subfolders', False, type=bool)
         self.use_fallback = self.settings.value('use_fallback', False, type=bool)
         self.service = self.settings.value('service', 'amazon')
+        self.qobuz_region = self.settings.value('qobuz_region', 'us')
         self.timeout_value = self.settings.value('timeout_value', 30, type=int)
         self.check_for_updates = self.settings.value('check_for_updates', True, type=bool)
         
@@ -811,6 +908,18 @@ class SpotiFLACGUI(QWidget):
         source_fallback_layout.addWidget(service_label)
         source_fallback_layout.addWidget(self.service_dropdown)
         
+        self.qobuz_region_dropdown = QobuzRegionComboBox()
+        self.qobuz_region_dropdown.setFixedWidth(150)
+        self.qobuz_region_dropdown.currentIndexChanged.connect(self.save_qobuz_region_setting)
+        self.qobuz_region_dropdown.setVisible(False)
+        source_fallback_layout.addWidget(self.qobuz_region_dropdown)
+
+        saved_region = self.qobuz_region
+        for i in range(self.qobuz_region_dropdown.count()):
+            if self.qobuz_region_dropdown.itemData(i, Qt.ItemDataRole.UserRole + 1) == saved_region:
+                self.qobuz_region_dropdown.setCurrentIndex(i)
+                break
+        
         source_fallback_layout.addSpacing(20)
         
         self.fallback_checkbox = QCheckBox('Fallback')
@@ -847,10 +956,14 @@ class SpotiFLACGUI(QWidget):
                 self.fallback_checkbox.setVisible(False)
                 self.timeout_input.setVisible(False)
                 self.timeout_label.setVisible(False)
+                if hasattr(self, 'qobuz_region_dropdown'):
+                    self.qobuz_region_dropdown.setVisible(True)
             else:
                 self.fallback_checkbox.setVisible(True)
                 self.timeout_input.setVisible(True)
                 self.timeout_label.setVisible(True)
+                if hasattr(self, 'qobuz_region_dropdown'):
+                    self.qobuz_region_dropdown.setVisible(False)
     
     def setup_about_tab(self):
         about_tab = QWidget()
@@ -902,7 +1015,7 @@ class SpotiFLACGUI(QWidget):
                 spacer = QSpacerItem(20, 6, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 about_layout.addItem(spacer)
 
-        footer_label = QLabel("v2.7 | May 2025")
+        footer_label = QLabel("v2.8 | May 2025")
         footer_label.setStyleSheet("font-size: 12px; margin-top: 10px;")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -956,7 +1069,16 @@ class SpotiFLACGUI(QWidget):
         self.settings.sync()
         self.log_output.append(f"Service setting saved: {self.service_dropdown.currentText()}")
         
+        if hasattr(self, 'qobuz_region_dropdown'):
+            self.qobuz_region_dropdown.setVisible(service == "qobuz")
+        
         self.update_service_ui_visibility()
+    
+    def save_qobuz_region_setting(self):
+        region = self.qobuz_region_dropdown.currentData()
+        self.settings.setValue('qobuz_region', region)
+        self.settings.sync()
+        self.log_output.append(f"Qobuz region setting saved: {self.qobuz_region_dropdown.currentText()}")
     
     def save_settings(self):
         self.settings.setValue('output_path', self.output_dir.text().strip())
@@ -1233,6 +1355,7 @@ class SpotiFLACGUI(QWidget):
 
     def start_download_worker(self, tracks_to_download, outpath):
         service = self.service_dropdown.currentData()
+        qobuz_region = self.qobuz_region_dropdown.currentData() if service == "qobuz" else "us"
     
         self.worker = DownloadWorker(
             tracks_to_download, 
@@ -1246,7 +1369,8 @@ class SpotiFLACGUI(QWidget):
             self.use_album_subfolders,
             self.use_fallback,
             service,
-            self.timeout_value
+            self.timeout_value,
+            qobuz_region=qobuz_region
         )
         self.worker.finished.connect(self.on_download_finished)
         self.worker.progress.connect(self.update_progress)
