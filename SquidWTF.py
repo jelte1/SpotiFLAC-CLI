@@ -4,8 +4,20 @@ from datetime import datetime
 import sys
 import os
 
+def _safe_print(*args, **kwargs):
+    if sys.stdout:
+        print(*args, **kwargs)
+
+def _safe_stdout_write(data_to_write):
+    if sys.stdout:
+        sys.stdout.write(data_to_write)
+
+def _safe_flush():
+    if sys.stdout:
+        sys.stdout.flush()
+
 def get_track_info(isrc, region="us"):
-    print(f"Search: {isrc}")
+    _safe_print(f"Search: {isrc}")
     base_url = f"https://{region}.qobuz.squid.wtf"
     url = f"{base_url}/api/get-music?q={isrc}&offset=0"
     response = requests.get(url)
@@ -16,7 +28,7 @@ def get_track_info(isrc, region="us"):
     
     tracks = data["data"]["tracks"]["items"]
     if not tracks:
-        print(f"Not Found: {isrc}")
+        _safe_print(f"Not Found: {isrc}")
         raise Exception(f"No tracks found for ISRC: {isrc}")
     
     track = None
@@ -26,14 +38,14 @@ def get_track_info(isrc, region="us"):
             break
     
     if not track:
-        print(f"Not Found: {isrc}")
+        _safe_print(f"Not Found: {isrc}")
         raise Exception(f"No track with matching ISRC: {isrc}")
     
-    print(f"Found: {track['title']} - {track['performer']['name']}")
+    _safe_print(f"Found: {track['title']} - {track['performer']['name']}")
     return track
 
 def search_track(title, artist, strict_match=False, region="us"):
-    print(f"Search by title/artist: {title} - {artist}")
+    _safe_print(f"Search by title/artist: {title} - {artist}")
     
     search_query = f"{title} {artist}".replace("feat.", "").replace("ft.", "")
     
@@ -47,7 +59,7 @@ def search_track(title, artist, strict_match=False, region="us"):
     
     tracks = data["data"]["tracks"]["items"]
     if not tracks:
-        print(f"Not Found: {title} - {artist}")
+        _safe_print(f"Not Found: {title} - {artist}")
         raise Exception(f"No tracks found for: {title} - {artist}")
     
     best_match = None
@@ -60,7 +72,7 @@ def search_track(title, artist, strict_match=False, region="us"):
         
         if title_lower == item_title and (artist_lower in item_artist or item_artist in artist_lower):
             best_match = item
-            print(f"Found exact title match with artist: {item['title']} - {item['performer']['name']}")
+            _safe_print(f"Found exact title match with artist: {item['title']} - {item['performer']['name']}")
             break
     
     if not best_match and not strict_match:
@@ -70,24 +82,24 @@ def search_track(title, artist, strict_match=False, region="us"):
             
             if title_lower in item_title and (artist_lower in item_artist or item_artist in artist_lower):
                 best_match = item
-                print(f"Found partial match: {item['title']} - {item['performer']['name']}")
+                _safe_print(f"Found partial match: {item['title']} - {item['performer']['name']}")
                 break
     
     if strict_match and best_match:
         item_artist = best_match["performer"]["name"].lower()
         if artist_lower not in item_artist and item_artist not in artist_lower:
-            print(f"Artist mismatch in strict mode: Expected '{artist}', found '{best_match['performer']['name']}'")
+            _safe_print(f"Artist mismatch in strict mode: Expected '{artist}', found '{best_match['performer']['name']}'")
             best_match = None
     
     if not best_match and not strict_match and tracks:
         best_match = tracks[0]
-        print(f"No good match, using first result: {best_match['title']} - {best_match['performer']['name']}")
+        _safe_print(f"No good match, using first result: {best_match['title']} - {best_match['performer']['name']}")
     
     if not best_match:
-        print(f"Not Found: {title} - {artist}")
+        _safe_print(f"Not Found: {title} - {artist}")
         raise Exception(f"No suitable track found for: {title} - {artist}")
     
-    print(f"Found by title search: {best_match['title']} - {best_match['performer']['name']}")
+    _safe_print(f"Found by title search: {best_match['title']} - {best_match['performer']['name']}")
     return best_match
 
 def get_download_url(track_id, region="us"):
@@ -106,7 +118,7 @@ def download_file(url, filename, progress_callback=None):
     if directory and not os.path.exists(directory):
         try:
             os.makedirs(directory, exist_ok=True)
-            print(f"Created directory: {directory}")
+            _safe_print(f"Created directory: {directory}")
         except Exception as e:
             raise Exception(f"Failed to create directory {directory}: {str(e)}")
     
@@ -135,11 +147,11 @@ def download_file(url, filename, progress_callback=None):
                         progress_callback(downloaded, total_size)
                     elif total_size > 0:
                         progress = (downloaded / total_size) * 100
-                        sys.stdout.write(f"\rProgress Download: {progress:.1f}%")
-                        sys.stdout.flush()
+                        _safe_stdout_write(f"\rProgress Download: {progress:.1f}%")
+                        _safe_flush()
         
-        if total_size > 0:
-            sys.stdout.write("\n")
+        if total_size > 0 and not progress_callback:
+            _safe_stdout_write("\n")
         
         if not os.path.exists(filename) or os.path.getsize(filename) == 0:
             raise Exception(f"Download failed: File {filename} is empty or does not exist")
@@ -149,7 +161,7 @@ def download_file(url, filename, progress_callback=None):
         if os.path.exists(filename):
             try:
                 os.remove(filename)
-                print(f"Removed incomplete file: {filename}")
+                _safe_print(f"Removed incomplete file: {filename}")
             except:
                 pass
         raise Exception(f"Download failed: {str(e)}")
@@ -159,7 +171,7 @@ def embed_metadata(filename, track_info):
         raise Exception(f"Cannot embed metadata: File {filename} does not exist")
     
     try:
-        print("Embedding Tags...")
+        _safe_print("Embedding Tags...")
         audio = FLAC(filename)
         audio.clear()
         
@@ -190,7 +202,7 @@ def embed_metadata(filename, track_info):
                 
                 audio.add_picture(picture)
             except Exception as e:
-                print(f"Warning: Could not add cover image: {str(e)}")
+                _safe_print(f"Warning: Could not add cover image: {str(e)}")
         
         audio.save()
     except Exception as e:
@@ -206,7 +218,7 @@ def download_cover_image(url):
 
 def main():
     try:
-        isrc = "USUM72409273"
+        isrc = "USQX92500261"
         region = "us"
         
         track_info = get_track_info(isrc, region)
