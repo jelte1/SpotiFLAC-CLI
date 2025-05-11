@@ -6,15 +6,48 @@ import os
 
 def _safe_print(*args, **kwargs):
     if sys.stdout:
-        print(*args, **kwargs)
+        try:
+            print(*args, **kwargs)
+        except UnicodeEncodeError:
+            encoding = getattr(sys.stdout, 'encoding', None) or 'ascii'
+            
+            processed_args = []
+            for arg in args:
+                processed_args.append(str(arg).encode(encoding, 'replace').decode(encoding))
+            
+            processed_kwargs = {}
+            for k, v in kwargs.items():
+                if isinstance(v, str):
+                    processed_kwargs[k] = v.encode(encoding, 'replace').decode(encoding)
+                else:
+                    processed_kwargs[k] = v
+            try:
+                print(*processed_args, **processed_kwargs)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
 def _safe_stdout_write(data_to_write):
     if sys.stdout:
-        sys.stdout.write(data_to_write)
+        try:
+            sys.stdout.write(data_to_write)
+        except UnicodeEncodeError:
+            encoding = getattr(sys.stdout, 'encoding', None) or 'ascii'
+            safe_data = data_to_write.encode(encoding, 'replace').decode(encoding)
+            try:
+                sys.stdout.write(safe_data)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
 def _safe_flush():
     if sys.stdout:
-        sys.stdout.flush()
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
 
 def get_track_info(isrc, region="us"):
     _safe_print(f"Search: {isrc}")
