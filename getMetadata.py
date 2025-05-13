@@ -319,8 +319,6 @@ def format_track_data(track_data):
     
     image_url = track_data.get('album', {}).get('images', [{}])[0].get('url', '') if track_data.get('album', {}).get('images') else ''
     
-    isrc = track_data.get('external_ids', {}).get('isrc', '')
-    
     return {
         "track": {
             "artists": ", ".join(artists),
@@ -330,8 +328,7 @@ def format_track_data(track_data):
             "images": image_url,
             "release_date": track_data.get('album', {}).get('release_date', ''),
             "track_number": track_data.get('track_number', 0),
-            "external_urls": track_data.get('external_urls', {}).get('spotify', ''),
-            "isrc": isrc  
+            "external_urls": track_data.get('external_urls', {}).get('spotify', '')
         }
     }
 
@@ -347,20 +344,6 @@ def format_album_data(album_data):
         track_artists = []
         for artist in track.get('artists', []):
             track_artists.append(artist['name'])
-        
-        track_id = track.get('id', '')
-        track_isrc = ''
-        
-        if track_id and album_data.get('_token'):
-            try:
-                full_track_data = get_json_from_api(
-                    track_base_url.format(track_id),
-                    album_data.get('_token')
-                )
-                if full_track_data:
-                    track_isrc = full_track_data.get('external_ids', {}).get('isrc', '')
-            except:
-                pass
             
         track_list.append({
             "artists": ", ".join(track_artists),
@@ -370,8 +353,7 @@ def format_album_data(album_data):
             "images": image_url,
             "release_date": album_data.get('release_date', ''),
             "track_number": track.get('track_number', 0),
-            "external_urls": track.get('external_urls', {}).get('spotify', ''),
-            "isrc": track_isrc  
+            "external_urls": track.get('external_urls', {}).get('spotify', '')
         })
     
     album_info = {
@@ -407,8 +389,6 @@ def format_playlist_data(playlist_data):
         if track.get('album', {}).get('images'):
             track_image = track.get('album', {}).get('images', [{}])[0].get('url', '')
         
-        track_isrc = track.get('external_ids', {}).get('isrc', '')
-        
         track_list.append({
             "artists": ", ".join(artists),
             "name": track.get('name', ''),
@@ -417,8 +397,7 @@ def format_playlist_data(playlist_data):
             "images": track_image,
             "release_date": track.get('album', {}).get('release_date', ''),
             "track_number": track.get('track_number', 0),
-            "external_urls": track.get('external_urls', {}).get('spotify', ''),
-            "isrc": track_isrc  
+            "external_urls": track.get('external_urls', {}).get('spotify', '')
         })
     
     playlist_info = {
@@ -464,9 +443,9 @@ def get_filtered_data(spotify_url, batch=False, delay=1.0):
     return {"error": "Failed to get raw data"}
 
 if __name__ == '__main__':
-    playlist = "https://open.spotify.com/playlist/37i9dQZEVXbNG2KDcFcKOF"
-    album = "https://open.spotify.com/album/6J84szYCnMfzEcvIcfWMFL"
-    song = "https://open.spotify.com/track/7so0lgd0zP2Sbgs2d7a1SZ"
+    playlist = "https://open.spotify.com/playlist/5Qvz8wZIRYbEUUFoPueKI5"
+    album = "https://open.spotify.com/album/7kFyd5oyJdVX2pIi6P4iHE"
+    song = "https://open.spotify.com/track/4wJ5Qq0jBN4ajy7ouZIV1c"
     
     filtered_playlist = get_filtered_data(playlist, batch=True, delay=0.1)
     print(json.dumps(filtered_playlist, indent=2))
