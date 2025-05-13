@@ -17,7 +17,7 @@ from PyQt6.QtGui import QIcon, QTextCursor, QDesktopServices, QPixmap, QBrush, Q
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 from getMetadata import get_filtered_data, parse_uri, SpotifyInvalidUrlException
-from getTracks import TrackDownloader
+from getTracks import LucidaDownloader, SquidWTFDownloader
 
 @dataclass
 class Track:
@@ -28,6 +28,7 @@ class Track:
     track_number: int
     duration_ms: int
     id: str
+    isrc: str = ""
 
 class MetadataFetchWorker(QThread):
     finished = pyqtSignal(dict)
@@ -55,7 +56,7 @@ class DownloadWorker(QThread):
     
     def __init__(self, tracks, outpath, is_single_track=False, is_album=False, is_playlist=False, 
                  album_or_playlist_name='', filename_format='title_artist', use_track_numbers=True,
-                 use_album_subfolders=False, use_fallback=False, service="amazon", timeout=30):
+                 use_album_subfolders=False, use_fallback=False, service="amazon", timeout=30, qobuz_region="us"):
         super().__init__()
         self.tracks = tracks
         self.outpath = outpath
@@ -69,6 +70,7 @@ class DownloadWorker(QThread):
         self.use_fallback = use_fallback
         self.service = service
         self.timeout = timeout
+        self.qobuz_region = qobuz_region
         self.is_paused = False
         self.is_stopped = False
         self.failed_tracks = []
@@ -82,7 +84,10 @@ class DownloadWorker(QThread):
 
     def run(self):
         try:
-            downloader = TrackDownloader(self.use_fallback, self.timeout)
+            if self.service == "qobuz":
+                downloader = SquidWTFDownloader(self.qobuz_region, self.timeout)
+            else:
+                downloader = LucidaDownloader(self.use_fallback, self.timeout)
             
             def progress_update(current, total):
                 if total > 0:
@@ -110,30 +115,12 @@ class DownloadWorker(QThread):
                                 int((i) / total_tracks * 100))
                 
                 try:
-                    track_id = track.id
-                    self.progress.emit(f"Getting track info for ID: {track_id} from {self.service}", 0)
-                    
                     if self.is_playlist and self.use_album_subfolders:
                         album_folder = re.sub(r'[<>:"/\\|?*]', '_', track.album)
                         track_outpath = os.path.join(self.outpath, album_folder)
                         os.makedirs(track_outpath, exist_ok=True)
                     else:
                         track_outpath = self.outpath
-                    
-                    import asyncio
-                    metadata = asyncio.run(downloader.get_track_info(track_id, self.service))
-                    
-                    self.progress.emit(f"Track info received, starting download process", 0)
-                    
-                    is_paused_callback = lambda: self.is_paused
-                    is_stopped_callback = lambda: self.is_stopped
-                    
-                    downloaded_file = downloader.download(
-                        metadata, 
-                        track_outpath,
-                        is_paused_callback=is_paused_callback,
-                        is_stopped_callback=is_stopped_callback
-                    )
                     
                     if (self.is_album or (self.is_playlist and self.use_album_subfolders)) and self.use_track_numbers:
                         new_filename = f"{track.track_number:02d} - {self.get_formatted_filename(track)}"
@@ -142,6 +129,54 @@ class DownloadWorker(QThread):
                     
                     new_filename = re.sub(r'[<>:"/\\|?*]', '_', new_filename)
                     new_filepath = os.path.join(track_outpath, new_filename)
+                    
+                    if os.path.exists(new_filepath) and os.path.getsize(new_filepath) > 0:
+                        self.progress.emit(f"File already exists: {new_filename}. Skipping download.", 0)
+                        self.progress.emit(f"Skipped: {track.title} - {track.artists}", 
+                                    int((i + 1) / total_tracks * 100))
+                        continue
+                    
+                    if self.service == "qobuz":
+                        if not track.isrc:
+                            self.progress.emit(f"No ISRC found for track: {track.title}. Skipping.", 0)
+                            self.failed_tracks.append((track.title, track.artists, "No ISRC available"))
+                            continue
+                            
+                        self.progress.emit(f"Getting track from Qobuz with ISRC: {track.isrc}", 0)
+                        
+                        is_paused_callback = lambda: self.is_paused
+                        is_stopped_callback = lambda: self.is_stopped
+                        
+                        downloaded_file = downloader.download(
+                            track.isrc, 
+                            track_outpath,
+                            is_paused_callback=is_paused_callback,
+                            is_stopped_callback=is_stopped_callback
+                        )
+                    else:
+                        track_id = track.id
+                        self.progress.emit(f"Getting track info for ID: {track_id} from {self.service}", 0)
+                        
+                        import asyncio
+                        metadata = asyncio.run(downloader.get_track_info(track_id, self.service))
+                        
+                        self.progress.emit(f"Track info received, starting download process", 0)
+                        
+                        is_paused_callback = lambda: self.is_paused
+                        is_stopped_callback = lambda: self.is_stopped
+                        
+                        downloaded_file = downloader.download(
+                            metadata, 
+                            track_outpath,
+                            is_paused_callback=is_paused_callback,
+                            is_stopped_callback=is_stopped_callback
+                        )
+                    
+                    if downloaded_file == new_filepath:
+                        self.progress.emit(f"File already exists: {new_filename}", 0)
+                        self.progress.emit(f"Skipped: {track.title} - {track.artists}", 
+                                    int((i + 1) / total_tracks * 100))
+                        continue
                     
                     if os.path.exists(downloaded_file) and downloaded_file != new_filepath:
                         if os.path.exists(new_filepath):
@@ -236,6 +271,22 @@ class ServiceStatusChecker(QThread):
         except Exception as e:
             self.error.emit(f"Error checking service status: {str(e)}")
 
+class QobuzStatusChecker(QThread):
+    status_updated = pyqtSignal(bool)
+    error = pyqtSignal(str)
+    
+    def __init__(self, region="us"):
+        super().__init__()
+        self.region = region
+    
+    def run(self):
+        try:
+            response = requests.get(f"https://{self.region}.qobuz.squid.wtf", timeout=5)
+            self.status_updated.emit(response.status_code == 200)
+        except Exception as e:
+            self.error.emit(f"Error checking Qobuz status: {str(e)}")
+            self.status_updated.emit(False)
+
 class StatusIndicatorDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
         item_data = index.data(Qt.ItemDataRole.UserRole)
@@ -285,7 +336,8 @@ class ServiceComboBox(QComboBox):
         self.services = [
             {'id': 'tidal', 'name': 'Tidal', 'icon': 'tidal.png', 'online': False},
             {'id': 'amazon', 'name': 'Amazon Music', 'icon': 'amazon.png', 'online': False},
-            {'id': 'deezer', 'name': 'Deezer', 'icon': 'deezer.png', 'online': False}
+            {'id': 'deezer', 'name': 'Deezer', 'icon': 'deezer.png', 'online': False},
+            {'id': 'qobuz', 'name': 'Qobuz', 'icon': 'qobuz.png', 'online': False}
         ]
         
         for service in self.services:
@@ -327,11 +379,96 @@ class ServiceComboBox(QComboBox):
         
     def currentData(self, role=Qt.ItemDataRole.UserRole + 1):
         return super().currentData(role)
+
+    def update_qobuz_status(self, region_id, is_online):
+        for i in range(self.count()):
+            service_id = self.itemData(i, Qt.ItemDataRole.UserRole + 1)
+            
+            if service_id == 'qobuz':
+                service_data = self.itemData(i, Qt.ItemDataRole.UserRole)
+                if isinstance(service_data, dict):
+                    if is_online or service_data.get('online', False):
+                        service_data['online'] = True
+                        self.setItemData(i, service_data, Qt.ItemDataRole.UserRole)
+                break
+        
+        self.update()
+
+class QobuzRegionComboBox(QComboBox):
+    status_updated = pyqtSignal(str, bool)
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setIconSize(QSize(16, 16))
+        
+        self.setItemDelegate(StatusIndicatorDelegate())
+        
+        self.setup_items()
+        
+        self.status_checkers = {}
+        self.check_status()
+        
+        self.status_timer = QTimer(self)
+        self.status_timer.timeout.connect(self.check_status)
+        self.status_timer.start(10000)
+        
+    def setup_items(self):
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        self.regions = [
+            {'id': 'eu', 'name': 'Europe', 'icon': 'eu.svg', 'online': False},
+            {'id': 'us', 'name': 'North America', 'icon': 'us.svg', 'online': False}
+        ]
+        
+        for region in self.regions:
+            icon_path = os.path.join(current_dir, region['icon'])
+            if not os.path.exists(icon_path):
+                self.create_placeholder_icon(icon_path)
+            
+            icon = QIcon(icon_path)
+            
+            self.addItem(icon, region['name'])
+            item_index = self.count() - 1
+            self.setItemData(item_index, region['id'], Qt.ItemDataRole.UserRole + 1)
+            self.setItemData(item_index, region, Qt.ItemDataRole.UserRole)
+    
+    def create_placeholder_icon(self, path):
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        pixmap.save(path)
+    
+    def update_region_status(self, region_id, is_online):
+        for i in range(self.count()):
+            current_region_id = self.itemData(i, Qt.ItemDataRole.UserRole + 1)
+            
+            if current_region_id == region_id:
+                region_data = self.itemData(i, Qt.ItemDataRole.UserRole)
+                if isinstance(region_data, dict):
+                    region_data['online'] = is_online
+                    self.setItemData(i, region_data, Qt.ItemDataRole.UserRole)
+                break
+        
+        self.update()
+    
+    def check_status(self):
+        for region in self.regions:
+            region_id = region['id']
+            checker = QobuzStatusChecker(region_id)
+            checker.status_updated.connect(lambda status, rid=region_id: self.handle_status_update(rid, status))
+            checker.start()
+            self.status_checkers[region_id] = checker
+    
+    def handle_status_update(self, region_id, is_online):
+        self.update_region_status(region_id, is_online)
+        self.status_updated.emit(region_id, is_online)
+        
+    def currentData(self, role=Qt.ItemDataRole.UserRole + 1):
+        return super().currentData(role)
         
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "2.6"
+        self.current_version = "2.7"
         self.tracks = []
         self.reset_state()
         
@@ -344,6 +481,7 @@ class SpotiFLACGUI(QWidget):
         self.use_album_subfolders = self.settings.value('use_album_subfolders', False, type=bool)
         self.use_fallback = self.settings.value('use_fallback', False, type=bool)
         self.service = self.settings.value('service', 'amazon')
+        self.qobuz_region = self.settings.value('qobuz_region', 'us')
         self.timeout_value = self.settings.value('timeout_value', 30, type=int)
         self.check_for_updates = self.settings.value('check_for_updates', True, type=bool)
         
@@ -602,6 +740,7 @@ class SpotiFLACGUI(QWidget):
         
         output_dir_layout.addWidget(self.output_dir)
         output_dir_layout.addWidget(self.output_browse)
+        
         output_layout.addLayout(output_dir_layout)
         
         settings_layout.addWidget(output_group)
@@ -663,7 +802,7 @@ class SpotiFLACGUI(QWidget):
         auth_layout = QVBoxLayout(auth_group)
         auth_layout.setSpacing(5)
         
-        auth_label = QLabel('Lucida Settings')
+        auth_label = QLabel('Service Settings')
         auth_label.setStyleSheet("font-weight: bold;")
         auth_layout.addWidget(auth_label)
 
@@ -672,37 +811,57 @@ class SpotiFLACGUI(QWidget):
         service_label = QLabel('Service:')
         
         self.service_dropdown = ServiceComboBox()
-        self.service_dropdown.currentIndexChanged.connect(self.save_service_setting)
+        self.service_dropdown.currentIndexChanged.connect(self.on_service_changed)
         
         service_fallback_layout.addWidget(service_label)
         service_fallback_layout.addWidget(self.service_dropdown)
         
-        service_fallback_layout.addSpacing(20)
-        
+        service_fallback_layout.addSpacing(10)
+
         self.fallback_checkbox = QCheckBox('Fallback')
         self.fallback_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fallback_checkbox.setChecked(self.use_fallback)
         self.fallback_checkbox.toggled.connect(self.save_fallback_setting)
         service_fallback_layout.addWidget(self.fallback_checkbox)
         
-        service_fallback_layout.addSpacing(20)
-        
         timeout_label = QLabel('Timeout:')
         self.timeout_input = QLineEdit()
         self.timeout_input.setText(str(self.timeout_value))
-        self.timeout_input.setFixedWidth(60)
+        self.timeout_input.setFixedWidth(35)
         self.timeout_input.textChanged.connect(self.save_timeout_setting)
         service_fallback_layout.addWidget(timeout_label)
         service_fallback_layout.addWidget(self.timeout_input)
+        
+        region_label = QLabel('Region:')
+        self.qobuz_region_dropdown = QobuzRegionComboBox()
+        self.qobuz_region_dropdown.currentIndexChanged.connect(self.save_qobuz_region_setting)
+        service_fallback_layout.addWidget(region_label)
+        service_fallback_layout.addWidget(self.qobuz_region_dropdown)
+        
+        region_label.hide()
+        self.qobuz_region_dropdown.hide()
         
         service_fallback_layout.addStretch()
         auth_layout.addLayout(service_fallback_layout)
         
         settings_layout.addWidget(auth_group)
-
         settings_layout.addStretch()
         settings_tab.setLayout(settings_layout)
         self.tab_widget.addTab(settings_tab, "Settings")
+        
+        for i in range(self.service_dropdown.count()):
+            if self.service_dropdown.itemData(i, Qt.ItemDataRole.UserRole + 1) == self.service:
+                self.service_dropdown.setCurrentIndex(i)
+                break
+                
+        for i in range(self.qobuz_region_dropdown.count()):
+            if self.qobuz_region_dropdown.itemData(i, Qt.ItemDataRole.UserRole + 1) == self.qobuz_region:
+                self.qobuz_region_dropdown.setCurrentIndex(i)
+                break
+        
+        self.qobuz_region_dropdown.status_updated.connect(
+            lambda region_id, is_online: self.service_dropdown.update_qobuz_status(region_id, is_online)
+        )
         
     def setup_about_tab(self):
         about_tab = QWidget()
@@ -754,12 +913,57 @@ class SpotiFLACGUI(QWidget):
                 spacer = QSpacerItem(20, 6, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 about_layout.addItem(spacer)
 
-        footer_label = QLabel("v2.6 | May 2025")
+        footer_label = QLabel("v2.7 | May 2025")
         footer_label.setStyleSheet("font-size: 12px; margin-top: 10px;")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
         about_tab.setLayout(about_layout)
         self.tab_widget.addTab(about_tab, "About")
+
+    def on_service_changed(self, index):
+        service = self.service_dropdown.currentData()
+        self.service = service
+        self.settings.setValue('service', service)
+        self.settings.sync()
+        
+        timeout_label = None
+        for widget in self.timeout_input.parentWidget().children():
+            if isinstance(widget, QLabel) and widget.text() == "Timeout:":
+                timeout_label = widget
+                break
+        
+        if service == "qobuz":
+            self.fallback_checkbox.hide()
+            self.timeout_input.hide()
+            if timeout_label:
+                timeout_label.hide()
+            
+            region_label = None
+            for widget in self.qobuz_region_dropdown.parentWidget().children():
+                if isinstance(widget, QLabel) and widget.text() == "Region:":
+                    region_label = widget
+                    break
+            
+            if region_label:
+                region_label.show()
+            self.qobuz_region_dropdown.show()
+        else:
+            self.fallback_checkbox.show()
+            self.timeout_input.show()
+            if timeout_label:
+                timeout_label.show()
+            
+            region_label = None
+            for widget in self.qobuz_region_dropdown.parentWidget().children():
+                if isinstance(widget, QLabel) and widget.text() == "Region:":
+                    region_label = widget
+                    break
+            
+            if region_label:
+                region_label.hide()
+            self.qobuz_region_dropdown.hide()
+            
+        self.log_output.append(f"Service changed to: {self.service_dropdown.currentText()}")
 
     def save_url(self):
         self.settings.setValue('spotify_url', self.spotify_url.text().strip())
@@ -801,12 +1005,12 @@ class SpotiFLACGUI(QWidget):
             self.timeout_input.setText(str(self.timeout_value))
             self.log_output.append("Timeout must be a valid number")
     
-    def save_service_setting(self):
-        service = self.service_dropdown.currentData()
-        self.service = service
-        self.settings.setValue('service', service)
+    def save_qobuz_region_setting(self):
+        region = self.qobuz_region_dropdown.currentData()
+        self.qobuz_region = region
+        self.settings.setValue('qobuz_region', region)
         self.settings.sync()
-        self.log_output.append(f"Service setting saved: {self.service_dropdown.currentText()}")
+        self.log_output.append(f"Qobuz region setting saved: {self.qobuz_region_dropdown.currentText()}")
     
     def save_settings(self):
         self.settings.setValue('output_path', self.output_dir.text().strip())
@@ -868,7 +1072,8 @@ class SpotiFLACGUI(QWidget):
             album=track_data["album_name"],
             track_number=1,
             duration_ms=track_data.get("duration_ms", 0),
-            id=track_id
+            id=track_id,
+            isrc=track_data.get("isrc", "")
         )]
         self.is_single_track = True
         self.is_album = self.is_playlist = False
@@ -897,7 +1102,8 @@ class SpotiFLACGUI(QWidget):
                 album=self.album_or_playlist_name,
                 track_number=track["track_number"],
                 duration_ms=track.get("duration_ms", 0),
-                id=track_id
+                id=track_id,
+                isrc=track.get("isrc", "")
             ))
             
         self.is_album = True
@@ -926,7 +1132,8 @@ class SpotiFLACGUI(QWidget):
                 album=track["album_name"],
                 track_number=len(self.tracks) + 1,
                 duration_ms=track.get("duration_ms", 0),
-                id=track_id
+                id=track_id,
+                isrc=track.get("isrc", "")
             ))
             
         self.is_playlist = True
@@ -1083,6 +1290,7 @@ class SpotiFLACGUI(QWidget):
 
     def start_download_worker(self, tracks_to_download, outpath):
         service = self.service_dropdown.currentData()
+        qobuz_region = self.qobuz_region_dropdown.currentData() if service == "qobuz" else "us"
     
         self.worker = DownloadWorker(
             tracks_to_download, 
@@ -1096,7 +1304,8 @@ class SpotiFLACGUI(QWidget):
             self.use_album_subfolders,
             self.use_fallback,
             service,
-            self.timeout_value
+            self.timeout_value,
+            qobuz_region
         )
         self.worker.finished.connect(self.on_download_finished)
         self.worker.progress.connect(self.update_progress)
@@ -1136,7 +1345,7 @@ class SpotiFLACGUI(QWidget):
         else:
             self.log_output.append(message)
         
-        if percentage > 0:
+        if percentage > 0 and not "Download progress:" in message:
             self.progress_bar.setValue(percentage)
 
     def stop_download(self):
@@ -1211,6 +1420,16 @@ class SpotiFLACGUI(QWidget):
         self.time_label.hide()
 
 if __name__ == '__main__':
+    try:
+        if sys.platform == "win32":
+            import os
+            os.system("chcp 65001 > nul")
+            import io
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    except Exception as e:
+        print(f"Warning: Could not set UTF-8 encoding: {e}")
+        
     app = QApplication(sys.argv)
     ex = SpotiFLACGUI()
     ex.show()
