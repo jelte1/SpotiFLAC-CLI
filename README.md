@@ -10,8 +10,8 @@
 
 #
 
-> [!WARNING] 
-Sometimes, the **download speed** from Lucida can be fast or slow; it varies unpredictably.
+> [!Note] 
+**Download speed** from Lucida is unpredictable—sometimes fast, sometimes slow. Join their [Discord](https://discord.com/invite/dXEGRWqEbS) for updates.
 
 ## Screenshots
 
