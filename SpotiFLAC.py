@@ -10,14 +10,14 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
     QLabel, QFileDialog, QListWidget, QTextEdit, QTabWidget, QButtonGroup, QRadioButton,
     QAbstractItemView, QSpacerItem, QSizePolicy, QProgressBar, QCheckBox, QDialog,
-    QDialogButtonBox, QComboBox, QStyledItemDelegate, QStyle
+    QDialogButtonBox, QComboBox, QStyledItemDelegate
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl, QTimer, QTime, QSettings, QSize
-from PyQt6.QtGui import QIcon, QTextCursor, QDesktopServices, QPixmap, QBrush, QPalette
+from PyQt6.QtGui import QIcon, QTextCursor, QDesktopServices, QPixmap, QBrush
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 from getMetadata import get_filtered_data, parse_uri, SpotifyInvalidUrlException
-from getTracks import LucidaDownloader, SquidWTFDownloader
+from getTracks import LucidaDownloader, SquidWTFDownloader, TidalDownloader 
 
 @dataclass
 class Track:
@@ -86,6 +86,8 @@ class DownloadWorker(QThread):
         try:
             if self.service == "qobuz":
                 downloader = SquidWTFDownloader(self.qobuz_region, self.timeout)
+            elif self.service == "tidal_api": 
+                downloader = TidalDownloader(timeout=self.timeout)
             else:
                 downloader = LucidaDownloader(self.use_fallback, self.timeout)
             
@@ -141,7 +143,7 @@ class DownloadWorker(QThread):
                             self.progress.emit(f"No ISRC found for track: {track.title}. Skipping.", 0)
                             self.failed_tracks.append((track.title, track.artists, "No ISRC available"))
                             continue
-                            
+                        
                         self.progress.emit(f"Getting track from Qobuz with ISRC: {track.isrc}", 0)
                         
                         is_paused_callback = lambda: self.is_paused
@@ -153,13 +155,57 @@ class DownloadWorker(QThread):
                             is_paused_callback=is_paused_callback,
                             is_stopped_callback=is_stopped_callback
                         )
-                    else:
+                    elif self.service == "tidal_api": 
+                        if not track.isrc:
+                            self.progress.emit(f"No ISRC found for track: {track.title}. Skipping.", 0)
+                            self.failed_tracks.append((track.title, track.artists, "No ISRC available"))
+                            continue
+                        
+                        self.progress.emit(f"Searching and downloading from Tidal (API) for ISRC: {track.isrc} - {track.title} - {track.artists}", 0)
+                        
+                        import asyncio 
+                        
+                        is_paused_callback = lambda: self.is_paused
+                        is_stopped_callback = lambda: self.is_stopped
+                        
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if loop.is_closed():
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                        except RuntimeError:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+
+                        download_result_details = loop.run_until_complete(downloader.download(
+                            query=f"{track.title} {track.artists}", 
+                            isrc=track.isrc,
+                            output_dir=track_outpath,
+                            quality="LOSSLESS", 
+                            embed_metadata=True, 
+                            is_paused_callback=is_paused_callback,
+                            is_stopped_callback=is_stopped_callback
+                        ))
+                        
+                        if isinstance(download_result_details, str) and os.path.exists(download_result_details): 
+                            downloaded_file = download_result_details
+                        elif isinstance(download_result_details, dict) and download_result_details.get("success") == False and download_result_details.get("error") == "Download stopped by user":
+                            self.progress.emit(f"Download stopped by user for: {track.title}",0)
+                            return 
+                        elif isinstance(download_result_details, dict) and download_result_details.get("success") == False:
+                            raise Exception(download_result_details.get("error", "Tidal API download failed"))
+                        elif isinstance(download_result_details, dict) and download_result_details.get("status") == "all_skipped" or download_result_details.get("status") == "skipped_exists":
+                            self.progress.emit(f"File already exists or skipped: {new_filename}",0)
+                            downloaded_file = new_filepath 
+                        else: 
+                            downloaded_file = None 
+                            raise Exception(f"Tidal API download failed or returned unexpected result: {download_result_details}")
+
+                    else: 
                         track_id = track.id
                         self.progress.emit(f"Getting track info for ID: {track_id} from {self.service}", 0)
                         
-                        import asyncio
-                        metadata = asyncio.run(downloader.get_track_info(track_id, self.service))
-                        
+                        metadata = downloader.get_track_info(track_id, self.service) 
                         self.progress.emit(f"Track info received, starting download process", 0)
                         
                         is_paused_callback = lambda: self.is_paused
@@ -172,7 +218,10 @@ class DownloadWorker(QThread):
                             is_stopped_callback=is_stopped_callback
                         )
                     
-                    if downloaded_file == new_filepath:
+                    if self.is_stopped: 
+                        return
+
+                    if downloaded_file == new_filepath: 
                         self.progress.emit(f"File already exists: {new_filename}", 0)
                         self.progress.emit(f"Skipped: {track.title} - {track.artists}", 
                                     int((i + 1) / total_tracks * 100))
@@ -255,21 +304,32 @@ class ServiceStatusChecker(QThread):
     def run(self):
         try:
             response = requests.get("https://lucida.to/api/stats", timeout=5)
+            services_status = {}
             if response.status_code == 200:
                 data = response.json()
-                services_status = {}
-                
                 current_services = data.get('all', {}).get('downloads', {}).get('current', {}).get('services', {})
-                
                 services_status['amazon'] = current_services.get('amazon', 0) > 0
                 services_status['tidal'] = current_services.get('tidal', 0) > 0
                 services_status['deezer'] = current_services.get('deezer', 0) > 0
-                
-                self.status_updated.emit(services_status)
             else:
-                self.error.emit(f"Server returned status code: {response.status_code}")
+                self.error.emit(f"Lucida API error: {response.status_code}")
+            
+            self.status_updated.emit(services_status) 
         except Exception as e:
-            self.error.emit(f"Error checking service status: {str(e)}")
+            self.error.emit(f"Error checking Lucida service status: {str(e)}")
+
+class TidalStatusChecker(QThread):
+    status_updated = pyqtSignal(bool)
+    error = pyqtSignal(str)
+
+    def run(self):
+        try:
+            response = requests.get("https://tidal.401658.xyz", timeout=5)
+            is_online = response.status_code == 200
+            self.status_updated.emit(is_online)
+        except Exception as e:
+            self.error.emit(f"Error checking Tidal (API) status: {str(e)}")
+            self.status_updated.emit(False)
 
 class QobuzStatusChecker(QThread):
     status_updated = pyqtSignal(bool)
@@ -293,11 +353,6 @@ class StatusIndicatorDelegate(QStyledItemDelegate):
         is_online = item_data.get('online', False) if item_data else False
         
         super().paint(painter, option, index)
-        
-        if option.state & QStyle.StateFlag.State_Selected:
-            text_color = option.palette.color(QPalette.ColorGroup.Active, QPalette.ColorRole.HighlightedText)
-        else:
-            text_color = option.palette.color(QPalette.ColorGroup.Active, QPalette.ColorRole.Text)
         
         indicator_color = Qt.GlobalColor.green if is_online else Qt.GlobalColor.red
         
@@ -323,12 +378,21 @@ class ServiceComboBox(QComboBox):
         
         self.status_checker = ServiceStatusChecker()
         self.status_checker.status_updated.connect(self.update_service_status)
-        self.status_checker.error.connect(lambda e: print(f"Status check error: {e}"))
+        self.status_checker.error.connect(lambda e: print(f"General status check error: {e}"))
         self.status_checker.start()
         
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.refresh_status)
-        self.status_timer.start(5000)
+        self.status_timer.start(5000) 
+
+        self.tidal_api_status_checker = TidalStatusChecker() 
+        self.tidal_api_status_checker.status_updated.connect(self.update_tidal_api_service_status) 
+        self.tidal_api_status_checker.error.connect(lambda e: print(f"Tidal (API) status check error: {e}")) 
+        self.tidal_api_status_checker.start()
+
+        self.tidal_api_status_timer = QTimer(self) 
+        self.tidal_api_status_timer.timeout.connect(self.refresh_tidal_api_status) 
+        self.tidal_api_status_timer.start(6000) 
         
     def setup_items(self):
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -337,7 +401,8 @@ class ServiceComboBox(QComboBox):
             {'id': 'tidal', 'name': 'Tidal', 'icon': 'tidal.png', 'online': False},
             {'id': 'amazon', 'name': 'Amazon Music', 'icon': 'amazon.png', 'online': False},
             {'id': 'deezer', 'name': 'Deezer', 'icon': 'deezer.png', 'online': False},
-            {'id': 'qobuz', 'name': 'Qobuz', 'icon': 'qobuz.png', 'online': False}
+            {'id': 'qobuz', 'name': 'Qobuz', 'icon': 'qobuz.png', 'online': False},
+            {'id': 'tidal_api', 'name': 'Tidal (API)', 'icon': 'tidal.png', 'online': False} 
         ]
         
         for service in self.services:
@@ -358,12 +423,12 @@ class ServiceComboBox(QComboBox):
         pixmap.save(path)
     
     def update_service_status(self, status_dict):
-        self.services_status = status_dict
+        self.services_status.update(status_dict) 
         
         for i in range(self.count()):
             service_id = self.itemData(i, Qt.ItemDataRole.UserRole + 1)
             
-            if service_id in self.services_status:
+            if service_id in self.services_status: 
                 service_data = self.itemData(i, Qt.ItemDataRole.UserRole)
                 if isinstance(service_data, dict):
                     service_data['online'] = self.services_status[service_id]
@@ -374,8 +439,25 @@ class ServiceComboBox(QComboBox):
     def refresh_status(self):
         self.status_checker = ServiceStatusChecker()
         self.status_checker.status_updated.connect(self.update_service_status)
-        self.status_checker.error.connect(lambda e: print(f"Status check error: {e}"))
+        self.status_checker.error.connect(lambda e: print(f"General status check error: {e}"))
         self.status_checker.start()
+
+    def update_tidal_api_service_status(self, is_online): 
+        for i in range(self.count()):
+            service_id = self.itemData(i, Qt.ItemDataRole.UserRole + 1)
+            if service_id == 'tidal_api': 
+                service_data = self.itemData(i, Qt.ItemDataRole.UserRole)
+                if isinstance(service_data, dict):
+                    service_data['online'] = is_online
+                    self.setItemData(i, service_data, Qt.ItemDataRole.UserRole)
+                break 
+        self.update()
+
+    def refresh_tidal_api_status(self): 
+        self.tidal_api_status_checker = TidalStatusChecker() 
+        self.tidal_api_status_checker.status_updated.connect(self.update_tidal_api_service_status) 
+        self.tidal_api_status_checker.error.connect(lambda e: print(f"Tidal (API) status check error: {e}")) 
+        self.tidal_api_status_checker.start()
         
     def currentData(self, role=Qt.ItemDataRole.UserRole + 1):
         return super().currentData(role)
@@ -468,7 +550,7 @@ class QobuzRegionComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "2.7"
+        self.current_version = "2.8"
         self.tracks = []
         self.reset_state()
         
@@ -913,7 +995,7 @@ class SpotiFLACGUI(QWidget):
                 spacer = QSpacerItem(20, 6, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 about_layout.addItem(spacer)
 
-        footer_label = QLabel("v2.7 | May 2025")
+        footer_label = QLabel("v2.8 | May 2025")
         footer_label.setStyleSheet("font-size: 12px; margin-top: 10px;")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -932,32 +1014,34 @@ class SpotiFLACGUI(QWidget):
                 timeout_label = widget
                 break
         
+        region_label = None
+        for widget in self.qobuz_region_dropdown.parentWidget().children():
+            if isinstance(widget, QLabel) and widget.text() == "Region:":
+                region_label = widget
+                break
+
         if service == "qobuz":
             self.fallback_checkbox.hide()
             self.timeout_input.hide()
             if timeout_label:
                 timeout_label.hide()
             
-            region_label = None
-            for widget in self.qobuz_region_dropdown.parentWidget().children():
-                if isinstance(widget, QLabel) and widget.text() == "Region:":
-                    region_label = widget
-                    break
-            
             if region_label:
                 region_label.show()
             self.qobuz_region_dropdown.show()
-        else:
+        elif service == "tidal_api": 
+            self.fallback_checkbox.hide()
+            self.timeout_input.hide()
+            if timeout_label:
+                timeout_label.hide()
+            if region_label:
+                region_label.hide()
+            self.qobuz_region_dropdown.hide()
+        else: 
             self.fallback_checkbox.show()
             self.timeout_input.show()
             if timeout_label:
                 timeout_label.show()
-            
-            region_label = None
-            for widget in self.qobuz_region_dropdown.parentWidget().children():
-                if isinstance(widget, QLabel) and widget.text() == "Region:":
-                    region_label = widget
-                    break
             
             if region_label:
                 region_label.hide()
