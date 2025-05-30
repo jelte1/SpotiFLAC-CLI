@@ -764,8 +764,18 @@ class TidalDownloader:
             if copyright_info:
                 audio["COPYRIGHT"] = copyright_info
             
-            if album_info.get("releaseDate"):
-                audio["DATE"] = album_info["releaseDate"][:4]  
+            release_date = None
+            if search_info and search_info.get("streamStartDate"):
+                release_date = search_info["streamStartDate"]
+            elif track_info.get("streamStartDate"):
+                release_date = track_info["streamStartDate"]
+            
+            if release_date:
+                if "T" in release_date:
+                    date_part = release_date.split("T")[0]
+                    audio["DATE"] = date_part
+                else:
+                    audio["DATE"] = release_date
             
             if track_info.get("genre"):
                 audio["GENRE"] = track_info["genre"]
@@ -1014,7 +1024,7 @@ async def main():
     print("\n\n=== SquidWTFDownloader ===")
     squid = SquidWTFDownloader(region="us")
     
-    isrc = "USUM72409273"
+    isrc = "USAT22409172"
     output_dir = "."
     
     try:

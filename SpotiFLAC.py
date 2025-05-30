@@ -550,7 +550,7 @@ class QobuzRegionComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "2.8"
+        self.current_version = "2.9"
         self.tracks = []
         self.reset_state()
         
@@ -954,7 +954,7 @@ class SpotiFLACGUI(QWidget):
         sections = [
             ("Check for Updates", "https://github.com/afkarxyz/SpotiFLAC/releases"),
             ("Report an Issue", "https://github.com/afkarxyz/SpotiFLAC/issues"),
-            ("Lucida Site", "https://lucida.to/stats")
+            ("Lucida Status", "https://status.lucida.to")
         ]
 
         for title, url in sections:
@@ -995,7 +995,7 @@ class SpotiFLACGUI(QWidget):
                 spacer = QSpacerItem(20, 6, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 about_layout.addItem(spacer)
 
-        footer_label = QLabel("v2.8 | May 2025")
+        footer_label = QLabel("v2.9 | May 2025")
         footer_label.setStyleSheet("font-size: 12px; margin-top: 10px;")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
