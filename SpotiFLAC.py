@@ -550,7 +550,7 @@ class QobuzRegionComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "2.9"
+        self.current_version = "3.0"
         self.tracks = []
         self.reset_state()
         
@@ -995,7 +995,7 @@ class SpotiFLACGUI(QWidget):
                 spacer = QSpacerItem(20, 6, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 about_layout.addItem(spacer)
 
-        footer_label = QLabel("v2.9 | May 2025")
+        footer_label = QLabel("v3.0 | May 2025")
         footer_label.setStyleSheet("font-size: 12px; margin-top: 10px;")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -1355,7 +1355,8 @@ class SpotiFLACGUI(QWidget):
 
     def download_tracks(self, indices):
         self.log_output.clear()
-        outpath = self.output_dir.text()
+        raw_outpath = self.output_dir.text().strip()
+        outpath = os.path.normpath(raw_outpath)
         if not os.path.exists(outpath):
             self.log_output.append('Warning: Invalid output directory.')
             return
@@ -1363,7 +1364,8 @@ class SpotiFLACGUI(QWidget):
         tracks_to_download = self.tracks if self.is_single_track else [self.tracks[i] for i in indices]
 
         if self.is_album or self.is_playlist:
-            folder_name = re.sub(r'[<>:"/\\|?*]', '_', self.album_or_playlist_name)
+            name = self.album_or_playlist_name.strip()
+            folder_name = re.sub(r'[<>:"/\\|?*]', '_', name)
             outpath = os.path.join(outpath, folder_name)
             os.makedirs(outpath, exist_ok=True)
 
