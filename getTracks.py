@@ -352,7 +352,9 @@ class SquidWTFDownloader:
                 items = data.get("data", {}).get("tracks", {}).get("items", [])
                 priority = {24: 1, 16: 2}
                 for track in items:
-                    if track.get("isrc") == isrc:
+                    track_isrc = track.get("isrc", "").upper()
+                    search_isrc = isrc.upper()
+                    if track_isrc == search_isrc:
                         current_prio = priority.get(track.get("maximum_bit_depth"), 3)
                         if selected_track is None or current_prio < priority.get(selected_track.get("maximum_bit_depth"), 3):
                             selected_track = track
@@ -646,7 +648,7 @@ class TidalDownloader:
                 return result
             
             if isrc:
-                isrc_items = [item for item in result["items"] if item.get("isrc") == isrc]
+                isrc_items = [item for item in result["items"] if item.get("isrc", "").upper() == isrc.upper()]
                 
                 if len(isrc_items) > 1:
                     hires_items = []
