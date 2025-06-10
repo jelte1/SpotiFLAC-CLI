@@ -32,7 +32,7 @@ def generate_totp(
         counter * 30_000,
     )
 
-token_url = 'https://open.spotify.com/get_access_token'
+token_url = 'https://open.spotify.com/api/token'
 playlist_base_url = 'https://api.spotify.com/v1/playlists/{}'
 album_base_url = 'https://api.spotify.com/v1/albums/{}'
 track_base_url = 'https://api.spotify.com/v1/tracks/{}'
