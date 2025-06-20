@@ -674,7 +674,7 @@ class TidalDownloader:
     
     async def get_track_download_info(self, track_id, quality="LOSSLESS"):
         try:
-            download_api_url = f"https://tidal.401658.xyz/track/?id={track_id}&quality={quality}"
+            download_api_url = f"https://hifi.401658.xyz/track/?id={track_id}&quality={quality}"
             
             async with httpx.AsyncClient(http2=True, timeout=self.timeout) as client:
                 response = await client.get(download_api_url)
