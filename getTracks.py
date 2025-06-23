@@ -21,7 +21,7 @@ class ProgressCallback:
             print(f"\r{current / (1024 * 1024):.2f} MB", end="")
 
 class LucidaDownloader:
-    def __init__(self, domain="to", timeout=30):
+    def __init__(self, timeout=30):
         self.client = requests.Session()
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -29,10 +29,7 @@ class LucidaDownloader:
         self.progress_callback = ProgressCallback()
         self.timeout = timeout
         
-        if domain not in ["to", "su"]:
-            raise ValueError("Domain must be either 'to' or 'su'")
-        
-        self.base_domain = f"lucida.{domain}"
+        self.base_domain = "lucida.to"
 
     def set_progress_callback(self, callback):
         self.progress_callback = callback
@@ -975,9 +972,17 @@ class TidalDownloader:
             print(f"Search error: {search_result['error']}")
             return {"success": False, "error": search_result['error']}
         
+        raw_result = None
+        if isrc:
+            raw_result = await self.search_tracks(query)
+        
         if not search_result["items"]:
-            print("No tracks found")
-            return {"success": False, "error": "No tracks found"}
+            if isrc and raw_result and raw_result.get("items"):
+                print("No tracks found with ISRC filter, falling back to unfiltered search")
+                search_result = raw_result
+            else:
+                print("No tracks found")
+                return {"success": False, "error": "No tracks found"}
         
         track_ids = [item["id"] for item in search_result["items"]]
         print(f"Found {len(track_ids)} track(s): {track_ids}")
@@ -1007,9 +1012,16 @@ class TidalDownloader:
                 raise Exception("Download stopped by user")
             raise Exception(result["error"])
 
+def print_progress(current, total):
+    if total > 0:
+        percent = (current / total) * 100
+        print(f"\rProgress: {percent:.2f}% ({current}/{total})", end="")
+    else:
+        print(f"\rDownloaded: {current / (1024 * 1024):.2f} MB", end="")
+
 async def main():
     print("=== LucidaDownloader ===")
-    lucida = LucidaDownloader(domain="to")
+    lucida = LucidaDownloader()
     track_id = "2plbrEY59IikOBgBGLjaoe"
     service = "tidal"
     output_dir = "."
@@ -1018,7 +1030,7 @@ async def main():
         print(f"Getting track: {track_id} from {service}")
         metadata = await lucida.get_track_info(track_id, service)
         print("Starting download")
-        downloaded_file = await lucida.download(metadata, output_dir)
+        downloaded_file = lucida.download(metadata, output_dir)
         print(f"Success: File saved as {downloaded_file}")
     except Exception as e:
         print(f"Error: {str(e)}")
