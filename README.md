@@ -8,11 +8,6 @@
 
 ### [Download](https://github.com/afkarxyz/SpotiFLAC/releases/download/v3.4/SpotiFLAC.exe)
 
-#
-
-> [!Note] 
-**Download speed** from Lucida is unpredictable—sometimes fast, sometimes slow. Join their [Discord](https://discord.com/invite/dXEGRWqEbS) for updates.
-
 ## Screenshots
 
 ![image](https://github.com/user-attachments/assets/70a5dceb-3374-4255-8f6a-4afb5ee534b0)
