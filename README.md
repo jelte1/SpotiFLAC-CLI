@@ -3,7 +3,7 @@
 ![SpotiFLAC](https://github.com/user-attachments/assets/b4c4f403-edbd-4a71-b74b-c7d433d47d06)
 
 <div align="center">
-<b>SpotiFLAC</b> allows you to download Spotify tracks in true FLAC format through services like Tidal, Amazon Music, and Deezer <code>(via Lucida)</code>, as well as Qobuz <code>(via SquidWTF)</code>.
+<b>SpotiFLAC</b> allows you to download Spotify tracks in true FLAC format through services like Qobuz & Tidal.
 </div>
 
 ### [Download](https://github.com/afkarxyz/SpotiFLAC/releases/download/v3.4/SpotiFLAC.exe)
