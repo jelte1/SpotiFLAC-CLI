@@ -2,35 +2,43 @@ from time import sleep
 from urllib.parse import urlparse, parse_qs
 import requests
 import json
-import hmac
 import time
-import hashlib
-from typing import Tuple, Callable, Dict, Any, List
+import pyotp
+import base64
+from random import randrange
+from typing import Dict, Any, List, Tuple
 
-_TOTP_SECRET = bytearray([53,53,48,55,49,52,53,56,53,51,52,56,55,52,57,57,53,57,50,50,52,56,54,51,48,51,50,57,51,52,55])
+# https://github.com/visagenull/Spotify-Free
+def get_random_user_agent():
+    return f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_{randrange(11, 15)}_{randrange(4, 9)}) AppleWebKit/{randrange(530, 537)}.{randrange(30, 37)} (KHTML, like Gecko) Chrome/{randrange(80, 105)}.0.{randrange(3000, 4500)}.{randrange(60, 125)} Safari/{randrange(530, 537)}.{randrange(30, 36)}"
 
-def generate_totp(
-    secret: bytes = _TOTP_SECRET,
-    algorithm: Callable[[], object] = hashlib.sha1,
-    digits: int = 6,
-    counter_factory: Callable[[], int] = lambda: int(time.time()) // 30,
-) -> Tuple[str, int]:
-    counter = counter_factory()
-    hmac_result = hmac.new(
-        secret, counter.to_bytes(8, byteorder="big"), algorithm
-    ).digest()
+def generate_totp():
+    secret_cipher = [37, 84, 32, 76, 87, 90, 87, 47, 13, 75, 48, 54, 44, 28, 19, 21, 22]
+    processed = [byte ^ ((i % 33) + 9) for i, byte in enumerate(secret_cipher)]
+    processed_str = "".join(map(str, processed))
+    utf8_bytes = processed_str.encode('utf-8')
+    hex_str = utf8_bytes.hex()
+    secret_bytes = bytes.fromhex(hex_str)
+    b32_secret = base64.b32encode(secret_bytes).decode('utf-8')
+    totp = pyotp.TOTP(b32_secret)
 
-    offset = hmac_result[-1] & 15
-    truncated_value = (
-        (hmac_result[offset] & 127) << 24
-        | (hmac_result[offset + 1] & 255) << 16
-        | (hmac_result[offset + 2] & 255) << 8
-        | (hmac_result[offset + 3] & 255)
-    )
-    return (
-        str(truncated_value % (10**digits)).zfill(digits),
-        counter * 30_000,
-    )
+    headers = {
+        "Host": "open.spotify.com",
+        "User-Agent": get_random_user_agent(),
+        "Accept": "*/*",
+    }
+
+    try:
+        resp = requests.get("https://open.spotify.com/api/server-time", headers=headers, timeout=10)
+        if resp.status_code != 200:
+            raise Exception(f"Failed to get server time. Status code: {resp.status_code}")
+        data = resp.json()
+        server_time = data.get("serverTime")
+        if server_time is None:
+            raise Exception("Failed to fetch server time from Spotify")
+        return totp, server_time
+    except Exception as e:
+        raise Exception(f"Error getting server time: {str(e)}")
 
 token_url = 'https://open.spotify.com/api/token'
 playlist_base_url = 'https://api.spotify.com/v1/playlists/{}'
@@ -102,14 +110,20 @@ def get_json_from_api(api_url, access_token):
 
 def get_access_token():
     try:
-        totp, timestamp = generate_totp()
+        totp, server_time = generate_totp()
+        otp_code = totp.at(int(server_time))
+        timestamp_ms = int(time.time() * 1000)
         
         params = {
-            "reason": "init",
-            "productType": "web-player",
-            "totp": totp,
-            "totpVer": 5,
-            "ts": timestamp,
+            'reason': 'init',
+            'productType': 'web-player',
+            'totp': otp_code,
+            'totpServerTime': server_time,
+            'totpVer': '8',
+            'sTime': server_time,
+            'cTime': timestamp_ms,
+            'buildVer': 'web-player_2025-07-02_1720000000000_12345678',
+            'buildDate': '2025-07-02'
         }
         
         req = requests.get(token_url, headers=headers, params=params, timeout=10)

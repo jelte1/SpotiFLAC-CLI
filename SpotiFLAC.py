@@ -17,7 +17,8 @@ from PyQt6.QtGui import QIcon, QTextCursor, QDesktopServices, QPixmap, QBrush
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 from getMetadata import get_filtered_data, parse_uri, SpotifyInvalidUrlException
-from getTracks import LucidaDownloader, SquidWTFDownloader, TidalDownloader 
+from qobuzDL import QobuzDownloader
+from tidalDL import TidalDownloader
 
 @dataclass
 class Track:
@@ -53,10 +54,9 @@ class MetadataFetchWorker(QThread):
 class DownloadWorker(QThread):
     finished = pyqtSignal(bool, str, list)
     progress = pyqtSignal(str, int)
-    
-    def __init__(self, tracks, outpath, is_single_track=False, is_album=False, is_playlist=False, 
+    def __init__(self, tracks, outpath, is_single_track=False, is_album=False, is_playlist=False,
                  album_or_playlist_name='', filename_format='title_artist', use_track_numbers=True,
-                 use_album_subfolders=False, service="amazon", timeout=30, qobuz_region="us"):
+                 use_album_subfolders=False, service="tidal", qobuz_region="us"):
         super().__init__()
         self.tracks = tracks
         self.outpath = outpath
@@ -68,7 +68,6 @@ class DownloadWorker(QThread):
         self.use_track_numbers = use_track_numbers
         self.use_album_subfolders = use_album_subfolders
         self.service = service
-        self.timeout = timeout
         self.qobuz_region = qobuz_region
         self.is_paused = False
         self.is_stopped = False
@@ -84,11 +83,11 @@ class DownloadWorker(QThread):
     def run(self):
         try:
             if self.service == "qobuz":
-                downloader = SquidWTFDownloader(self.qobuz_region, self.timeout)
-            elif self.service == "tidal_api": 
-                downloader = TidalDownloader(timeout=self.timeout)
+                downloader = QobuzDownloader(self.qobuz_region)
+            elif self.service == "tidal": 
+                downloader = TidalDownloader()
             else:
-                downloader = LucidaDownloader(timeout=self.timeout)
+                downloader = TidalDownloader()
             
             def progress_update(current, total):
                 if total > 0:
@@ -154,16 +153,15 @@ class DownloadWorker(QThread):
                             is_paused_callback=is_paused_callback,
                             is_stopped_callback=is_stopped_callback
                         )
-                    elif self.service == "tidal_api": 
+                    elif self.service == "tidal": 
                         if not track.isrc:
                             self.progress.emit(f"No ISRC found for track: {track.title}. Skipping.", 0)
                             self.failed_tracks.append((track.title, track.artists, "No ISRC available"))
                             continue
                         
-                        self.progress.emit(f"Searching and downloading from Tidal (API) for ISRC: {track.isrc} - {track.title} - {track.artists}", 0)
+                        self.progress.emit(f"Searching and downloading from Tidal for ISRC: {track.isrc} - {track.title} - {track.artists}", 0)
                         
                         import asyncio 
-                        
                         is_paused_callback = lambda: self.is_paused
                         is_stopped_callback = lambda: self.is_stopped
                         
@@ -181,7 +179,6 @@ class DownloadWorker(QThread):
                             isrc=track.isrc,
                             output_dir=track_outpath,
                             quality="LOSSLESS", 
-                            embed_metadata=True, 
                             is_paused_callback=is_paused_callback,
                             is_stopped_callback=is_stopped_callback
                         ))
@@ -192,13 +189,13 @@ class DownloadWorker(QThread):
                             self.progress.emit(f"Download stopped by user for: {track.title}",0)
                             return 
                         elif isinstance(download_result_details, dict) and download_result_details.get("success") == False:
-                            raise Exception(download_result_details.get("error", "Tidal API download failed"))                        
+                            raise Exception(download_result_details.get("error", "Tidal download failed"))                        
                         elif isinstance(download_result_details, dict) and (download_result_details.get("status") == "all_skipped" or download_result_details.get("status") == "skipped_exists"):
                             self.progress.emit(f"File already exists or skipped: {new_filename}",0)
                             downloaded_file = new_filepath
                         else: 
                             downloaded_file = None 
-                            raise Exception(f"Tidal API download failed or returned unexpected result: {download_result_details}")                    
+                            raise Exception(f"Tidal download failed or returned unexpected result: {download_result_details}")                    
                     else: 
                         track_id = track.id
                         self.progress.emit(f"Getting track info for ID: {track_id} from {self.service}", 0)
@@ -306,26 +303,7 @@ class UpdateDialog(QDialog):
         self.update_button.clicked.connect(self.accept)
         self.cancel_button.clicked.connect(self.reject)
         
-class ServiceStatusChecker(QThread):
-    status_updated = pyqtSignal(dict)
-    error = pyqtSignal(str)
-    
-    def run(self):
-        try:
-            response = requests.get("https://lucida.to/api/stats", timeout=5)
-            services_status = {}
-            if response.status_code == 200:
-                data = response.json()
-                current_services = data.get('downloads', {}).get('current', {}).get('services', {})
-                services_status['amazon'] = current_services.get('amazon', 0) > 0
-                services_status['tidal'] = current_services.get('tidal', 0) > 0
-                services_status['deezer'] = current_services.get('deezer', 0) > 0
-            else:
-                self.error.emit(f"Lucida API error: {response.status_code}")
-            
-            self.status_updated.emit(services_status) 
-        except Exception as e:
-            self.error.emit(f"Error checking Lucida service status: {str(e)}")
+
 
 class TidalStatusChecker(QThread):
     status_updated = pyqtSignal(bool)
@@ -382,36 +360,23 @@ class ServiceComboBox(QComboBox):
         self.services_status = {}
         
         self.setItemDelegate(StatusIndicatorDelegate())
-        
         self.setup_items()
         
-        self.status_checker = ServiceStatusChecker()
-        self.status_checker.status_updated.connect(self.update_service_status)
-        self.status_checker.error.connect(lambda e: print(f"General status check error: {e}"))
-        self.status_checker.start()
-        
-        self.status_timer = QTimer(self)
-        self.status_timer.timeout.connect(self.refresh_status)
-        self.status_timer.start(5000) 
+        self.tidal_status_checker = TidalStatusChecker()
+        self.tidal_status_checker.status_updated.connect(self.update_tidal_service_status) 
+        self.tidal_status_checker.error.connect(lambda e: print(f"Tidal status check error: {e}")) 
+        self.tidal_status_checker.start()
 
-        self.tidal_api_status_checker = TidalStatusChecker() 
-        self.tidal_api_status_checker.status_updated.connect(self.update_tidal_api_service_status) 
-        self.tidal_api_status_checker.error.connect(lambda e: print(f"Tidal (API) status check error: {e}")) 
-        self.tidal_api_status_checker.start()
-
-        self.tidal_api_status_timer = QTimer(self) 
-        self.tidal_api_status_timer.timeout.connect(self.refresh_tidal_api_status) 
-        self.tidal_api_status_timer.start(6000) 
+        self.tidal_status_timer = QTimer(self)
+        self.tidal_status_timer.timeout.connect(self.refresh_tidal_status) 
+        self.tidal_status_timer.start(6000)
         
     def setup_items(self):
         current_dir = os.path.dirname(os.path.abspath(__file__))
         
         self.services = [
-            {'id': 'tidal', 'name': 'Tidal (Lucida)', 'icon': 'tidal.png', 'online': False},
-            {'id': 'amazon', 'name': 'Amazon (Lucida)', 'icon': 'amazon.png', 'online': False},
-            {'id': 'deezer', 'name': 'Deezer (Lucida)', 'icon': 'deezer.png', 'online': False},
-            {'id': 'qobuz', 'name': 'Qobuz (SquidWTF)', 'icon': 'qobuz.png', 'online': False},
-            {'id': 'tidal_api', 'name': 'Tidal (API)', 'icon': 'tidal.png', 'online': False} 
+            {'id': 'qobuz', 'name': 'Qobuz', 'icon': 'qobuz.png', 'online': False},
+            {'id': 'tidal', 'name': 'Tidal', 'icon': 'tidal.png', 'online': False} 
         ]
         
         for service in self.services:
@@ -425,48 +390,27 @@ class ServiceComboBox(QComboBox):
             item_index = self.count() - 1
             self.setItemData(item_index, service['id'], Qt.ItemDataRole.UserRole + 1)
             self.setItemData(item_index, service, Qt.ItemDataRole.UserRole)
-    
     def create_placeholder_icon(self, path):
         pixmap = QPixmap(16, 16)
         pixmap.fill(Qt.GlobalColor.transparent)
         pixmap.save(path)
-    
-    def update_service_status(self, status_dict):
-        self.services_status.update(status_dict) 
-        
-        for i in range(self.count()):
-            service_id = self.itemData(i, Qt.ItemDataRole.UserRole + 1)
-            
-            if service_id in self.services_status: 
-                service_data = self.itemData(i, Qt.ItemDataRole.UserRole)
-                if isinstance(service_data, dict):
-                    service_data['online'] = self.services_status[service_id]
-                    self.setItemData(i, service_data, Qt.ItemDataRole.UserRole)
-        
-        self.update()
-    
-    def refresh_status(self):
-        self.status_checker = ServiceStatusChecker()
-        self.status_checker.status_updated.connect(self.update_service_status)
-        self.status_checker.error.connect(lambda e: print(f"General status check error: {e}"))
-        self.status_checker.start()
 
-    def update_tidal_api_service_status(self, is_online): 
+    def update_tidal_service_status(self, is_online): 
         for i in range(self.count()):
             service_id = self.itemData(i, Qt.ItemDataRole.UserRole + 1)
-            if service_id == 'tidal_api': 
+            if service_id == 'tidal': 
                 service_data = self.itemData(i, Qt.ItemDataRole.UserRole)
                 if isinstance(service_data, dict):
                     service_data['online'] = is_online
                     self.setItemData(i, service_data, Qt.ItemDataRole.UserRole)
                 break 
         self.update()
-
-    def refresh_tidal_api_status(self): 
-        self.tidal_api_status_checker = TidalStatusChecker() 
-        self.tidal_api_status_checker.status_updated.connect(self.update_tidal_api_service_status) 
-        self.tidal_api_status_checker.error.connect(lambda e: print(f"Tidal (API) status check error: {e}")) 
-        self.tidal_api_status_checker.start()
+        
+    def refresh_tidal_status(self):
+        self.tidal_status_checker = TidalStatusChecker() 
+        self.tidal_status_checker.status_updated.connect(self.update_tidal_service_status)
+        self.tidal_status_checker.error.connect(lambda e: print(f"Tidal status check error: {e}")) 
+        self.tidal_status_checker.start()
         
     def currentData(self, role=Qt.ItemDataRole.UserRole + 1):
         return super().currentData(role)
@@ -559,7 +503,7 @@ class QobuzRegionComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "3.4"
+        self.current_version = "3.5"
         self.tracks = []
         self.reset_state()
         
@@ -570,9 +514,8 @@ class SpotiFLACGUI(QWidget):
         self.filename_format = self.settings.value('filename_format', 'title_artist')
         self.use_track_numbers = self.settings.value('use_track_numbers', False, type=bool)
         self.use_album_subfolders = self.settings.value('use_album_subfolders', False, type=bool)
-        self.service = self.settings.value('service', 'amazon')
+        self.service = self.settings.value('service', 'tidal')
         self.qobuz_region = self.settings.value('qobuz_region', 'us')
-        self.timeout_value = self.settings.value('timeout_value', 30, type=int)
         self.check_for_updates = self.settings.value('check_for_updates', True, type=bool)
         
         self.elapsed_time = QTime(0, 0, 0)
@@ -902,20 +845,11 @@ class SpotiFLACGUI(QWidget):
         
         self.service_dropdown = ServiceComboBox()
         self.service_dropdown.currentIndexChanged.connect(self.on_service_changed)
-        
         service_fallback_layout.addWidget(service_label)
         service_fallback_layout.addWidget(self.service_dropdown)
         
         service_fallback_layout.addSpacing(10)
 
-        timeout_label = QLabel('Timeout:')
-        self.timeout_input = QLineEdit()
-        self.timeout_input.setText(str(self.timeout_value))
-        self.timeout_input.setFixedWidth(35)
-        self.timeout_input.textChanged.connect(self.save_timeout_setting)
-        service_fallback_layout.addWidget(timeout_label)
-        service_fallback_layout.addWidget(self.timeout_input)
-        
         region_label = QLabel('Region:')
         self.qobuz_region_dropdown = QobuzRegionComboBox()
         self.qobuz_region_dropdown.currentIndexChanged.connect(self.save_qobuz_region_setting)
@@ -932,7 +866,6 @@ class SpotiFLACGUI(QWidget):
         settings_layout.addStretch()
         settings_tab.setLayout(settings_layout)
         self.tab_widget.addTab(settings_tab, "Settings")
-        
         for i in range(self.service_dropdown.count()):
             if self.service_dropdown.itemData(i, Qt.ItemDataRole.UserRole + 1) == self.service:
                 self.service_dropdown.setCurrentIndex(i)
@@ -942,6 +875,8 @@ class SpotiFLACGUI(QWidget):
             if self.qobuz_region_dropdown.itemData(i, Qt.ItemDataRole.UserRole + 1) == self.qobuz_region:
                 self.qobuz_region_dropdown.setCurrentIndex(i)
                 break
+        
+        self.update_service_ui()
         
         self.qobuz_region_dropdown.status_updated.connect(
             lambda region_id, is_online: self.service_dropdown.update_qobuz_status(region_id, is_online)
@@ -955,8 +890,7 @@ class SpotiFLACGUI(QWidget):
 
         sections = [
             ("Check for Updates", "https://github.com/afkarxyz/SpotiFLAC/releases"),
-            ("Report an Issue", "https://github.com/afkarxyz/SpotiFLAC/issues"),
-            ("Lucida Status", "https://status.lucida.to")
+            ("Report an Issue", "https://github.com/afkarxyz/SpotiFLAC/issues")
         ]
 
         for title, url in sections:
@@ -988,7 +922,7 @@ class SpotiFLACGUI(QWidget):
                 }
             """)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.clicked.connect(lambda _, url=url: QDesktopServices.openUrl(QUrl(url)))
+            button.clicked.connect(lambda _, url=url: QDesktopServices.openUrl(QUrl(url if url.startswith(('http://', 'https://')) else f'https://{url}')))
             section_layout.addWidget(button, alignment=Qt.AlignmentFlag.AlignCenter)
 
             about_layout.addWidget(section_widget)
@@ -997,24 +931,17 @@ class SpotiFLACGUI(QWidget):
                 spacer = QSpacerItem(20, 6, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 about_layout.addItem(spacer)
 
-        footer_label = QLabel("v3.4 | June 2025")
+        footer_label = QLabel("v3.5 | July 2025")
         footer_label.setStyleSheet("font-size: 12px; margin-top: 10px;")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
         about_tab.setLayout(about_layout)
-        self.tab_widget.addTab(about_tab, "About")
-
+        self.tab_widget.addTab(about_tab, "About")    
     def on_service_changed(self, index):
         service = self.service_dropdown.currentData()
         self.service = service
         self.settings.setValue('service', service)
         self.settings.sync()
-        
-        timeout_label = None
-        for widget in self.timeout_input.parentWidget().children():
-            if isinstance(widget, QLabel) and widget.text() == "Timeout:":
-                timeout_label = widget
-                break
         
         region_label = None
         for widget in self.qobuz_region_dropdown.parentWidget().children():
@@ -1023,30 +950,32 @@ class SpotiFLACGUI(QWidget):
                 break
 
         if service == "qobuz":
-            self.timeout_input.hide()
-            if timeout_label:
-                timeout_label.hide()
-            
             if region_label:
                 region_label.show()
             self.qobuz_region_dropdown.show()
-        elif service == "tidal_api": 
-            self.timeout_input.hide()
-            if timeout_label:
-                timeout_label.hide()
+        else:
             if region_label:
                 region_label.hide()
             self.qobuz_region_dropdown.hide()
-        else: 
-            self.timeout_input.show()
-            if timeout_label:
-                timeout_label.show()
-            
+            self.log_output.append(f"Service changed to: {self.service_dropdown.currentText()}")
+
+    def update_service_ui(self):
+        service = self.service
+        
+        region_label = None
+        for widget in self.qobuz_region_dropdown.parentWidget().children():
+            if isinstance(widget, QLabel) and widget.text() == "Region:":
+                region_label = widget
+                break
+
+        if service == "qobuz":
+            if region_label:
+                region_label.show()
+            self.qobuz_region_dropdown.show()
+        else:
             if region_label:
                 region_label.hide()
             self.qobuz_region_dropdown.hide()
-            
-        self.log_output.append(f"Service changed to: {self.service_dropdown.currentText()}")
 
     def save_url(self):
         self.settings.setValue('spotify_url', self.spotify_url.text().strip())
@@ -1061,26 +990,10 @@ class SpotiFLACGUI(QWidget):
         self.use_track_numbers = self.track_number_checkbox.isChecked()
         self.settings.setValue('use_track_numbers', self.use_track_numbers)
         self.settings.sync()
-        
     def save_album_subfolder_setting(self):
         self.use_album_subfolders = self.album_subfolder_checkbox.isChecked()
         self.settings.setValue('use_album_subfolders', self.use_album_subfolders)
         self.settings.sync()
-    
-    def save_timeout_setting(self):
-        try:
-            timeout = int(self.timeout_input.text())
-            if timeout > 0:
-                self.timeout_value = timeout
-                self.settings.setValue('timeout_value', self.timeout_value)
-                self.settings.sync()
-                self.log_output.append(f"Timeout setting saved: {self.timeout_value} seconds")
-            else:
-                self.timeout_input.setText(str(self.timeout_value))
-                self.log_output.append("Timeout must be a positive number")
-        except ValueError:
-            self.timeout_input.setText(str(self.timeout_value))
-            self.log_output.append("Timeout must be a valid number")
     
     def save_qobuz_region_setting(self):
         region = self.qobuz_region_dropdown.currentData()
@@ -1382,7 +1295,6 @@ class SpotiFLACGUI(QWidget):
             self.use_track_numbers,
             self.use_album_subfolders,
             service,
-            self.timeout_value,
             qobuz_region
         )
         self.worker.finished.connect(self.on_download_finished)
