@@ -61,7 +61,7 @@ class DownloadWorker(QThread):
         self.tracks = tracks
         self.outpath = outpath
         self.is_single_track = is_single_track
-        self.is_album = is_album
+        self.is_album = is_album        
         self.is_playlist = is_playlist
         self.album_or_playlist_name = album_or_playlist_name
         self.filename_format = filename_format
@@ -76,6 +76,8 @@ class DownloadWorker(QThread):
     def get_formatted_filename(self, track):
         if self.filename_format == "artist_title":
             filename = f"{track.artists} - {track.title}.flac"
+        elif self.filename_format == "title_only":
+            filename = f"{track.title}.flac"
         else:
             filename = f"{track.title} - {track.artists}.flac"
         return re.sub(r'[<>:"/\\|?*]', '_', filename)
@@ -503,7 +505,7 @@ class QobuzRegionComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "3.7"
+        self.current_version = "3.8"
         self.tracks = []
         self.reset_state()
         
@@ -544,12 +546,11 @@ class SpotiFLACGUI(QWidget):
                     if dialog.disable_check.isChecked():
                         self.settings.setValue('check_for_updates', False)
                         self.check_for_updates = False
-                    
                     if result == QDialog.DialogCode.Accepted:
                         QDesktopServices.openUrl(QUrl("https://github.com/afkarxyz/SpotiFLAC/releases"))
                         
         except Exception as e:
-            print(f"Error checking for updates: {e}")
+            pass
 
     @staticmethod
     def format_duration(ms):
@@ -788,7 +789,6 @@ class SpotiFLACGUI(QWidget):
         
         format_layout = QHBoxLayout()
         format_label = QLabel('Filename Format:')
-        
         self.format_group = QButtonGroup(self)
         self.title_artist_radio = QRadioButton('Title - Artist')
         self.title_artist_radio.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -798,17 +798,25 @@ class SpotiFLACGUI(QWidget):
         self.artist_title_radio.setCursor(Qt.CursorShape.PointingHandCursor)
         self.artist_title_radio.toggled.connect(self.save_filename_format)
         
+        self.title_only_radio = QRadioButton('Title')
+        self.title_only_radio.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.title_only_radio.toggled.connect(self.save_filename_format)
+        
         if hasattr(self, 'filename_format') and self.filename_format == "artist_title":
             self.artist_title_radio.setChecked(True)
+        elif hasattr(self, 'filename_format') and self.filename_format == "title_only":
+            self.title_only_radio.setChecked(True)
         else:
             self.title_artist_radio.setChecked(True)
         
         self.format_group.addButton(self.title_artist_radio)
         self.format_group.addButton(self.artist_title_radio)
+        self.format_group.addButton(self.title_only_radio)
         
         format_layout.addWidget(format_label)
         format_layout.addWidget(self.title_artist_radio)
         format_layout.addWidget(self.artist_title_radio)
+        format_layout.addWidget(self.title_only_radio)
         format_layout.addStretch()
         file_layout.addLayout(format_layout)
 
@@ -931,7 +939,7 @@ class SpotiFLACGUI(QWidget):
                 spacer = QSpacerItem(20, 6, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 about_layout.addItem(spacer)
 
-        footer_label = QLabel("v3.7 | July 2025")
+        footer_label = QLabel("v3.8 | July 2025")
         footer_label.setStyleSheet("font-size: 12px; margin-top: 10px;")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -971,7 +979,7 @@ class SpotiFLACGUI(QWidget):
         if service == "qobuz":
             if region_label:
                 region_label.show()
-            self.qobuz_region_dropdown.show()
+            self.qobuz_region_dropdown.show()        
         else:
             if region_label:
                 region_label.hide()
@@ -982,7 +990,12 @@ class SpotiFLACGUI(QWidget):
         self.settings.sync()
         
     def save_filename_format(self):
-        self.filename_format = "artist_title" if self.artist_title_radio.isChecked() else "title_artist"
+        if self.artist_title_radio.isChecked():
+            self.filename_format = "artist_title"
+        elif self.title_only_radio.isChecked():
+            self.filename_format = "title_only"
+        else:
+            self.filename_format = "title_artist"
         self.settings.setValue('filename_format', self.filename_format)
         self.settings.sync()
         
@@ -1387,7 +1400,6 @@ class SpotiFLACGUI(QWidget):
             for i, track in enumerate(self.tracks, 1):
                 if self.is_playlist:
                     track.track_number = i
-                
                 duration = self.format_duration(track.duration_ms)
                 display_text = f"{i}. {track.title} - {track.artists} • {duration}"
                 list_item = self.track_list.item(i - 1)
@@ -1412,13 +1424,11 @@ class SpotiFLACGUI(QWidget):
 if __name__ == '__main__':
     try:
         if sys.platform == "win32":
-            import os
-            os.system("chcp 65001 > nul")
             import io
             sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
             sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
     except Exception as e:
-        print(f"Warning: Could not set UTF-8 encoding: {e}")
+        pass
         
     app = QApplication(sys.argv)
     ex = SpotiFLACGUI()
