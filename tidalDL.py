@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 import re
-import tempfile
 import time
 import httpx
 from mutagen.flac import FLAC, Picture
@@ -24,22 +23,11 @@ class TidalDownloader:
         self.progress_callback = ProgressCallback()
         self.client_id = "zU4XHVVkc2tDPo4t"
         self.client_secret = "VJKhDFqJPqvsPVNBV6ukXTJmwlvbttP7wlMlrc72se4="
-        self.temp_dir = tempfile.gettempdir()
-        self.token_path = os.path.join(self.temp_dir, "tidal_token.json")
-        self.access_token = None
-        self._load_token()
 
     def set_progress_callback(self, callback):
         self.progress_callback = callback
 
-    def _load_token(self):
-        if os.path.exists(self.token_path):
-            try:
-                with open(self.token_path, "r") as tok:
-                    token = json.loads(tok.read())
-                self.access_token = token.get("access_token")
-            except:
-                pass
+
     
     def sanitize_filename(self, filename):
         if not filename: 
@@ -48,9 +36,6 @@ class TidalDownloader:
         return re.sub(r'\s+', ' ', sanitized).strip() or "Unnamed Track"
 
     async def get_access_token(self):
-        if self.access_token:
-            return self.access_token
-            
         refresh_url = "https://auth.tidal.com/v1/oauth2/token"
         
         payload = {
@@ -68,18 +53,7 @@ class TidalDownloader:
                 
                 if response.status_code == 200:
                     token_data = response.json()
-                    new_token = token_data.get("access_token")
-                    
-                    try:
-                        with open(self.token_path, "w") as f:
-                            json.dump({
-                                "access_token": new_token
-                            }, f)
-                    except:
-                        pass
-                    
-                    self.access_token = new_token
-                    return new_token
+                    return token_data.get("access_token")
                 else:
                     return None
                     

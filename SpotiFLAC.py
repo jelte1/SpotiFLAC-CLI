@@ -505,7 +505,7 @@ class QobuzRegionComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "3.8"
+        self.current_version = "3.9"
         self.tracks = []
         self.reset_state()
         
@@ -939,7 +939,7 @@ class SpotiFLACGUI(QWidget):
                 spacer = QSpacerItem(20, 6, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 about_layout.addItem(spacer)
 
-        footer_label = QLabel("v3.8 | July 2025")
+        footer_label = QLabel("v3.9 | July 2025")
         footer_label.setStyleSheet("font-size: 12px; margin-top: 10px;")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
