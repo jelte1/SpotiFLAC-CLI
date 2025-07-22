@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import requests
 import re
+import asyncio
 from packaging import version
 
 from PyQt6.QtWidgets import (
@@ -162,8 +163,6 @@ class DownloadWorker(QThread):
                             continue
                         
                         self.progress.emit(f"Searching and downloading from Tidal for ISRC: {track.isrc} - {track.title} - {track.artists}", 0)
-                        
-                        import asyncio 
                         is_paused_callback = lambda: self.is_paused
                         is_stopped_callback = lambda: self.is_stopped
                         
@@ -202,8 +201,6 @@ class DownloadWorker(QThread):
                         track_id = track.id
                         self.progress.emit(f"Getting track info for ID: {track_id} from {self.service}", 0)
                         
-                        import asyncio
-                        
                         try:
                             loop = asyncio.get_event_loop()
                             if loop.is_closed():
@@ -225,21 +222,25 @@ class DownloadWorker(QThread):
                             is_paused_callback=is_paused_callback,
                             is_stopped_callback=is_stopped_callback
                         )
-                    
                     if self.is_stopped: 
                         return
 
-                    if downloaded_file == new_filepath: 
-                        self.progress.emit(f"File already exists: {new_filename}", 0)
-                        self.progress.emit(f"Skipped: {track.title} - {track.artists}", 
-                                    int((i + 1) / total_tracks * 100))
-                        continue
-                    
-                    if os.path.exists(downloaded_file) and downloaded_file != new_filepath:
-                        if os.path.exists(new_filepath):
-                            os.remove(new_filepath)
-                        os.rename(downloaded_file, new_filepath)
-                        self.progress.emit(f"File renamed to: {new_filename}", 0)
+                    if downloaded_file and os.path.exists(downloaded_file):
+                        if downloaded_file == new_filepath:
+                            self.progress.emit(f"File already exists: {new_filename}", 0)
+                            self.progress.emit(f"Skipped: {track.title} - {track.artists}", 
+                                        int((i + 1) / total_tracks * 100))
+                            continue
+                        
+                        if downloaded_file != new_filepath:
+                            try:
+                                os.rename(downloaded_file, new_filepath)
+                                self.progress.emit(f"File renamed to: {new_filename}", 0)
+                            except OSError as e:
+                                self.progress.emit(f"Warning: Could not rename file {downloaded_file} to {new_filepath}: {str(e)}", 0)
+                                pass
+                    else:
+                        raise Exception(f"Download failed or file not found: {downloaded_file}")
                     
                     self.progress.emit(f"Successfully downloaded: {track.title} - {track.artists}", 
                                     int((i + 1) / total_tracks * 100))
@@ -505,7 +506,7 @@ class QobuzRegionComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "3.9"
+        self.current_version = "3.9.5"
         self.tracks = []
         self.reset_state()
         
@@ -939,7 +940,7 @@ class SpotiFLACGUI(QWidget):
                 spacer = QSpacerItem(20, 6, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 about_layout.addItem(spacer)
 
-        footer_label = QLabel("v3.9 | July 2025")
+        footer_label = QLabel("v3.9.5 | July 2025")
         footer_label.setStyleSheet("font-size: 12px; margin-top: 10px;")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
