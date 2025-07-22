@@ -11,7 +11,8 @@
 #
 
 > [!Important]
-Requires **Google Chrome, Chromium, Microsoft Edge,** or **Brave** to use `Deezer`
+> - Requires **Google Chrome, Chromium, Microsoft Edge,** or **Brave** to use `Deezer`
+> - If after **Cloudflare** verification nothing happens, use a `VPN`, your country is likely blocked by `corsproxy.io`
 
 ## Screenshots
 
