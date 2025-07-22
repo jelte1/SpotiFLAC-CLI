@@ -20,6 +20,7 @@ from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkRepl
 from getMetadata import get_filtered_data, parse_uri, SpotifyInvalidUrlException
 from qobuzDL import QobuzDownloader
 from tidalDL import TidalDownloader
+from deezerDL import DeezerDownloader
 
 @dataclass
 class Track:
@@ -57,7 +58,7 @@ class DownloadWorker(QThread):
     progress = pyqtSignal(str, int)
     def __init__(self, tracks, outpath, is_single_track=False, is_album=False, is_playlist=False,
                  album_or_playlist_name='', filename_format='title_artist', use_track_numbers=True,
-                 use_album_subfolders=False, service="tidal", qobuz_region="us"):
+                 use_album_subfolders=False, service="tidal", qobuz_region="us", deezer_speed=5):
         super().__init__()
         self.tracks = tracks
         self.outpath = outpath
@@ -70,6 +71,7 @@ class DownloadWorker(QThread):
         self.use_album_subfolders = use_album_subfolders
         self.service = service
         self.qobuz_region = qobuz_region
+        self.deezer_speed = deezer_speed
         self.is_paused = False
         self.is_stopped = False
         self.failed_tracks = []
@@ -89,6 +91,8 @@ class DownloadWorker(QThread):
                 downloader = QobuzDownloader(self.qobuz_region)
             elif self.service == "tidal": 
                 downloader = TidalDownloader()
+            elif self.service == "deezer":
+                downloader = DeezerDownloader()
             else:
                 downloader = TidalDownloader()
             
@@ -196,7 +200,41 @@ class DownloadWorker(QThread):
                             downloaded_file = new_filepath
                         else: 
                             downloaded_file = None 
-                            raise Exception(f"Tidal download failed or returned unexpected result: {download_result_details}")                    
+                            raise Exception(f"Tidal download failed or returned unexpected result: {download_result_details}")
+                    elif self.service == "deezer":
+                        if not track.isrc:
+                            self.progress.emit(f"No ISRC found for track: {track.title}. Skipping.", 0)
+                            self.failed_tracks.append((track.title, track.artists, "No ISRC available"))
+                            continue
+                        
+                        self.progress.emit(f"Downloading from Deezer with ISRC: {track.isrc}", 0)
+                        
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if loop.is_closed():
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                        except RuntimeError:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                        
+                        success = loop.run_until_complete(downloader.download_by_isrc(track.isrc, track_outpath, self.deezer_speed))
+                        
+                        if success:
+                            safe_title = "".join(c for c in track.title if c.isalnum() or c in (' ', '-', '_')).rstrip()
+                            safe_artist = "".join(c for c in track.artists if c.isalnum() or c in (' ', '-', '_')).rstrip()
+                            expected_filename = f"{safe_artist} - {safe_title}.flac"
+                            downloaded_file = os.path.join(track_outpath, expected_filename)
+                            
+                            if not os.path.exists(downloaded_file):
+                                import glob
+                                flac_files = glob.glob(os.path.join(track_outpath, "*.flac"))
+                                if flac_files:
+                                    downloaded_file = max(flac_files, key=os.path.getctime)
+                                else:
+                                    raise Exception("Downloaded file not found")
+                        else:
+                            raise Exception("Deezer download failed")
                     else: 
                         track_id = track.id
                         self.progress.emit(f"Getting track info for ID: {track_id} from {self.service}", 0)
@@ -337,6 +375,19 @@ class QobuzStatusChecker(QThread):
             self.error.emit(f"Error checking Qobuz status: {str(e)}")
             self.status_updated.emit(False)
 
+class DeezerStatusChecker(QThread):
+    status_updated = pyqtSignal(bool)
+    error = pyqtSignal(str)
+
+    def run(self):
+        try:
+            response = requests.get("https://deezmate.com/", timeout=5)
+            is_online = response.status_code == 200
+            self.status_updated.emit(is_online)
+        except Exception as e:
+            self.error.emit(f"Error checking Deezer status: {str(e)}")
+            self.status_updated.emit(False)
+
 class StatusIndicatorDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
         item_data = index.data(Qt.ItemDataRole.UserRole)
@@ -374,12 +425,22 @@ class ServiceComboBox(QComboBox):
         self.tidal_status_timer.timeout.connect(self.refresh_tidal_status) 
         self.tidal_status_timer.start(6000)
         
+        self.deezer_status_checker = DeezerStatusChecker()
+        self.deezer_status_checker.status_updated.connect(self.update_deezer_service_status) 
+        self.deezer_status_checker.error.connect(lambda e: print(f"Deezer status check error: {e}")) 
+        self.deezer_status_checker.start()
+
+        self.deezer_status_timer = QTimer(self)
+        self.deezer_status_timer.timeout.connect(self.refresh_deezer_status) 
+        self.deezer_status_timer.start(6000)
+        
     def setup_items(self):
         current_dir = os.path.dirname(os.path.abspath(__file__))
         
         self.services = [
             {'id': 'qobuz', 'name': 'Qobuz', 'icon': 'qobuz.png', 'online': False},
-            {'id': 'tidal', 'name': 'Tidal', 'icon': 'tidal.png', 'online': False} 
+            {'id': 'tidal', 'name': 'Tidal', 'icon': 'tidal.png', 'online': False},
+            {'id': 'deezer', 'name': 'Deezer', 'icon': 'deezer.png', 'online': False}
         ]
         
         for service in self.services:
@@ -414,6 +475,23 @@ class ServiceComboBox(QComboBox):
         self.tidal_status_checker.status_updated.connect(self.update_tidal_service_status)
         self.tidal_status_checker.error.connect(lambda e: print(f"Tidal status check error: {e}")) 
         self.tidal_status_checker.start()
+        
+    def update_deezer_service_status(self, is_online): 
+        for i in range(self.count()):
+            service_id = self.itemData(i, Qt.ItemDataRole.UserRole + 1)
+            if service_id == 'deezer': 
+                service_data = self.itemData(i, Qt.ItemDataRole.UserRole)
+                if isinstance(service_data, dict):
+                    service_data['online'] = is_online
+                    self.setItemData(i, service_data, Qt.ItemDataRole.UserRole)
+                break 
+        self.update()
+        
+    def refresh_deezer_status(self):
+        self.deezer_status_checker = DeezerStatusChecker() 
+        self.deezer_status_checker.status_updated.connect(self.update_deezer_service_status)
+        self.deezer_status_checker.error.connect(lambda e: print(f"Deezer status check error: {e}")) 
+        self.deezer_status_checker.start()
         
     def currentData(self, role=Qt.ItemDataRole.UserRole + 1):
         return super().currentData(role)
@@ -506,7 +584,7 @@ class QobuzRegionComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "3.9.5"
+        self.current_version = "4.0"
         self.tracks = []
         self.reset_state()
         
@@ -519,6 +597,7 @@ class SpotiFLACGUI(QWidget):
         self.use_album_subfolders = self.settings.value('use_album_subfolders', False, type=bool)
         self.service = self.settings.value('service', 'tidal')
         self.qobuz_region = self.settings.value('qobuz_region', 'us')
+        self.deezer_speed = self.settings.value('deezer_speed', 7.5, type=float)
         self.check_for_updates = self.settings.value('check_for_updates', True, type=bool)
         
         self.elapsed_time = QTime(0, 0, 0)
@@ -868,6 +947,18 @@ class SpotiFLACGUI(QWidget):
         region_label.hide()
         self.qobuz_region_dropdown.hide()
         
+        self.deezer_speed_label = QLabel('Speed:')
+        self.deezer_speed_dropdown = QComboBox()
+        self.deezer_speed_dropdown.addItem('Fast (5s)', 5)
+        self.deezer_speed_dropdown.addItem('Normal (7.5s)', 7.5)
+        self.deezer_speed_dropdown.addItem('Slow (10s)', 10)
+        self.deezer_speed_dropdown.currentIndexChanged.connect(self.save_deezer_speed_setting)
+        service_fallback_layout.addWidget(self.deezer_speed_label)
+        service_fallback_layout.addWidget(self.deezer_speed_dropdown)
+        
+        self.deezer_speed_label.hide()
+        self.deezer_speed_dropdown.hide()
+        
         service_fallback_layout.addStretch()
         auth_layout.addLayout(service_fallback_layout)
         
@@ -883,6 +974,11 @@ class SpotiFLACGUI(QWidget):
         for i in range(self.qobuz_region_dropdown.count()):
             if self.qobuz_region_dropdown.itemData(i, Qt.ItemDataRole.UserRole + 1) == self.qobuz_region:
                 self.qobuz_region_dropdown.setCurrentIndex(i)
+                break
+        
+        for i in range(self.deezer_speed_dropdown.count()):
+            if self.deezer_speed_dropdown.itemData(i) == self.deezer_speed:
+                self.deezer_speed_dropdown.setCurrentIndex(i)
                 break
         
         self.update_service_ui()
@@ -940,7 +1036,7 @@ class SpotiFLACGUI(QWidget):
                 spacer = QSpacerItem(20, 6, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 about_layout.addItem(spacer)
 
-        footer_label = QLabel("v3.9.5 | July 2025")
+        footer_label = QLabel("v4.0 | July 2025")
         footer_label.setStyleSheet("font-size: 12px; margin-top: 10px;")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -952,21 +1048,8 @@ class SpotiFLACGUI(QWidget):
         self.settings.setValue('service', service)
         self.settings.sync()
         
-        region_label = None
-        for widget in self.qobuz_region_dropdown.parentWidget().children():
-            if isinstance(widget, QLabel) and widget.text() == "Region:":
-                region_label = widget
-                break
-
-        if service == "qobuz":
-            if region_label:
-                region_label.show()
-            self.qobuz_region_dropdown.show()
-        else:
-            if region_label:
-                region_label.hide()
-            self.qobuz_region_dropdown.hide()
-            self.log_output.append(f"Service changed to: {self.service_dropdown.currentText()}")
+        self.update_service_ui()
+        self.log_output.append(f"Service changed to: {self.service_dropdown.currentText()}")
 
     def update_service_ui(self):
         service = self.service
@@ -980,11 +1063,21 @@ class SpotiFLACGUI(QWidget):
         if service == "qobuz":
             if region_label:
                 region_label.show()
-            self.qobuz_region_dropdown.show()        
+            self.qobuz_region_dropdown.show()
+            self.deezer_speed_label.hide()
+            self.deezer_speed_dropdown.hide()
+        elif service == "deezer":
+            if region_label:
+                region_label.hide()
+            self.qobuz_region_dropdown.hide()
+            self.deezer_speed_label.show()
+            self.deezer_speed_dropdown.show()
         else:
             if region_label:
                 region_label.hide()
             self.qobuz_region_dropdown.hide()
+            self.deezer_speed_label.hide()
+            self.deezer_speed_dropdown.hide()
 
     def save_url(self):
         self.settings.setValue('spotify_url', self.spotify_url.text().strip())
@@ -1015,6 +1108,13 @@ class SpotiFLACGUI(QWidget):
         self.settings.setValue('qobuz_region', region)
         self.settings.sync()
         self.log_output.append(f"Qobuz region setting saved: {self.qobuz_region_dropdown.currentText()}")
+    
+    def save_deezer_speed_setting(self):
+        speed = self.deezer_speed_dropdown.currentData()
+        self.deezer_speed = speed
+        self.settings.setValue('deezer_speed', speed)
+        self.settings.sync()
+        self.log_output.append(f"Deezer speed setting saved: {self.deezer_speed_dropdown.currentText()}")
     
     def save_settings(self):
         self.settings.setValue('output_path', self.output_dir.text().strip())
@@ -1298,6 +1398,8 @@ class SpotiFLACGUI(QWidget):
         service = self.service_dropdown.currentData()
         qobuz_region = self.qobuz_region_dropdown.currentData() if service == "qobuz" else "us"
     
+        deezer_speed = self.deezer_speed_dropdown.currentData() if service == "deezer" else 7.5
+        
         self.worker = DownloadWorker(
             tracks_to_download, 
             outpath,
@@ -1309,7 +1411,8 @@ class SpotiFLACGUI(QWidget):
             self.use_track_numbers,
             self.use_album_subfolders,
             service,
-            qobuz_region
+            qobuz_region,
+            deezer_speed
         )
         self.worker.finished.connect(self.on_download_finished)
         self.worker.progress.connect(self.update_progress)
