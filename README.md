@@ -6,13 +6,7 @@
 <b>SpotiFLAC</b> allows you to download Spotify tracks in true FLAC format through services like Qobuz, Tidal & Deezer.
 </div>
 
-### [Download](https://github.com/afkarxyz/SpotiFLAC/releases/download/v4.0/SpotiFLAC.exe)
-
-#
-
-> [!Important]
-> - Requires **Google Chrome, Chromium, Microsoft Edge,** or **Brave** to use `Deezer`
-> - If after **Cloudflare** verification nothing happens, use a `VPN`, your country is likely blocked by `corsproxy.io`
+### [Download](https://github.com/afkarxyz/SpotiFLAC/releases/download/v4.1/SpotiFLAC.exe)
 
 ## Screenshots
 
