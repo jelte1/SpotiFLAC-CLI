@@ -2,10 +2,7 @@ import requests
 import asyncio
 import os
 import sys
-from urllib.parse import urlparse
 from mutagen.flac import FLAC
-from mutagen.id3 import ID3NoHeaderError
-import deezmate
 
 class DeezerDownloader:
     def __init__(self):
@@ -128,7 +125,7 @@ class DeezerDownloader:
         except Exception as e:
             print(f"Error embedding metadata: {e}")
     
-    async def download_by_isrc(self, isrc, output_dir=".", initial_delay=7.5):
+    async def download_by_isrc(self, isrc, output_dir="."):
         print(f"Fetching track info for ISRC: {isrc}")
         
         track_data = self.get_track_by_isrc(isrc)
@@ -139,16 +136,36 @@ class DeezerDownloader:
         metadata = self.extract_metadata(track_data)
         print(f"Found track: {metadata.get('artists', 'Unknown')} - {metadata.get('title', 'Unknown')}")
         
-        deezer_link = metadata.get('deezer_link')
-        if not deezer_link:
-            print("No Deezer link found in track data")
+        track_id = track_data.get('id')
+        if not track_id:
+            print("No track ID found in Deezer API response")
             return False
         
-        print(f"Using Deezer link: {deezer_link}")
+        print(f"Using track ID: {track_id}")
         
-        flac_url = await deezmate.main(deezer_link, initial_delay)
-        if not flac_url:
-            print("Failed to get download URL from deezmate")
+        api_url = f"https://api.deezmate.com/dl/{track_id}"
+        print(f"Requesting download links from: {api_url}")
+        
+        try:
+            response = self.session.get(api_url)
+            response.raise_for_status()
+            api_data = response.json()
+            
+            if not api_data.get('success'):
+                print("API request failed")
+                return False
+            
+            links = api_data.get('links', {})
+            flac_url = links.get('flac')
+            
+            if not flac_url:
+                print("No FLAC download link found in API response")
+                return False
+            
+            print(f"Successfully obtained FLAC download URL")
+            
+        except Exception as e:
+            print(f"Error getting download URL from API: {e}")
             return False
         
         print("Downloading FLAC file...")

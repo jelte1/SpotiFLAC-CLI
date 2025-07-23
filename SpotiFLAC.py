@@ -58,7 +58,7 @@ class DownloadWorker(QThread):
     progress = pyqtSignal(str, int)
     def __init__(self, tracks, outpath, is_single_track=False, is_album=False, is_playlist=False,
                  album_or_playlist_name='', filename_format='title_artist', use_track_numbers=True,
-                 use_album_subfolders=False, service="tidal", qobuz_region="us", deezer_speed=5):
+                 use_album_subfolders=False, service="tidal", qobuz_region="us"):
         super().__init__()
         self.tracks = tracks
         self.outpath = outpath
@@ -71,7 +71,6 @@ class DownloadWorker(QThread):
         self.use_album_subfolders = use_album_subfolders
         self.service = service
         self.qobuz_region = qobuz_region
-        self.deezer_speed = deezer_speed
         self.is_paused = False
         self.is_stopped = False
         self.failed_tracks = []
@@ -218,7 +217,7 @@ class DownloadWorker(QThread):
                             loop = asyncio.new_event_loop()
                             asyncio.set_event_loop(loop)
                         
-                        success = loop.run_until_complete(downloader.download_by_isrc(track.isrc, track_outpath, self.deezer_speed))
+                        success = loop.run_until_complete(downloader.download_by_isrc(track.isrc, track_outpath))
                         
                         if success:
                             safe_title = "".join(c for c in track.title if c.isalnum() or c in (' ', '-', '_')).rstrip()
@@ -584,7 +583,7 @@ class QobuzRegionComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "4.0"
+        self.current_version = "4.1"
         self.tracks = []
         self.all_tracks = []  
         self.reset_state()
@@ -598,7 +597,6 @@ class SpotiFLACGUI(QWidget):
         self.use_album_subfolders = self.settings.value('use_album_subfolders', False, type=bool)
         self.service = self.settings.value('service', 'tidal')
         self.qobuz_region = self.settings.value('qobuz_region', 'us')
-        self.deezer_speed = self.settings.value('deezer_speed', 7.5, type=float)
         self.check_for_updates = self.settings.value('check_for_updates', True, type=bool)
         
         self.elapsed_time = QTime(0, 0, 0)
@@ -1001,17 +999,7 @@ class SpotiFLACGUI(QWidget):
         region_label.hide()
         self.qobuz_region_dropdown.hide()
         
-        self.deezer_speed_label = QLabel('Speed:')
-        self.deezer_speed_dropdown = QComboBox()
-        self.deezer_speed_dropdown.addItem('Fast (5s)', 5)
-        self.deezer_speed_dropdown.addItem('Normal (7.5s)', 7.5)
-        self.deezer_speed_dropdown.addItem('Slow (10s)', 10)
-        self.deezer_speed_dropdown.currentIndexChanged.connect(self.save_deezer_speed_setting)
-        service_fallback_layout.addWidget(self.deezer_speed_label)
-        service_fallback_layout.addWidget(self.deezer_speed_dropdown)
-        
-        self.deezer_speed_label.hide()
-        self.deezer_speed_dropdown.hide()
+
         
         service_fallback_layout.addStretch()
         auth_layout.addLayout(service_fallback_layout)
@@ -1030,10 +1018,7 @@ class SpotiFLACGUI(QWidget):
                 self.qobuz_region_dropdown.setCurrentIndex(i)
                 break
         
-        for i in range(self.deezer_speed_dropdown.count()):
-            if self.deezer_speed_dropdown.itemData(i) == self.deezer_speed:
-                self.deezer_speed_dropdown.setCurrentIndex(i)
-                break
+
         
         self.update_service_ui()
         
@@ -1090,7 +1075,7 @@ class SpotiFLACGUI(QWidget):
                 spacer = QSpacerItem(20, 6, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
                 about_layout.addItem(spacer)
 
-        footer_label = QLabel("v4.0 | July 2025")
+        footer_label = QLabel("v4.1 | July 2025")
         footer_label.setStyleSheet("font-size: 12px; margin-top: 10px;")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -1118,20 +1103,14 @@ class SpotiFLACGUI(QWidget):
             if region_label:
                 region_label.show()
             self.qobuz_region_dropdown.show()
-            self.deezer_speed_label.hide()
-            self.deezer_speed_dropdown.hide()
         elif service == "deezer":
             if region_label:
                 region_label.hide()
             self.qobuz_region_dropdown.hide()
-            self.deezer_speed_label.show()
-            self.deezer_speed_dropdown.show()
         else:
             if region_label:
                 region_label.hide()
             self.qobuz_region_dropdown.hide()
-            self.deezer_speed_label.hide()
-            self.deezer_speed_dropdown.hide()
 
     def save_url(self):
         self.settings.setValue('spotify_url', self.spotify_url.text().strip())
@@ -1163,12 +1142,7 @@ class SpotiFLACGUI(QWidget):
         self.settings.sync()
         self.log_output.append(f"Qobuz region setting saved: {self.qobuz_region_dropdown.currentText()}")
     
-    def save_deezer_speed_setting(self):
-        speed = self.deezer_speed_dropdown.currentData()
-        self.deezer_speed = speed
-        self.settings.setValue('deezer_speed', speed)
-        self.settings.sync()
-        self.log_output.append(f"Deezer speed setting saved: {self.deezer_speed_dropdown.currentText()}")
+
     
     def save_settings(self):
         self.settings.setValue('output_path', self.output_dir.text().strip())
@@ -1457,8 +1431,6 @@ class SpotiFLACGUI(QWidget):
     def start_download_worker(self, tracks_to_download, outpath):
         service = self.service_dropdown.currentData()
         qobuz_region = self.qobuz_region_dropdown.currentData() if service == "qobuz" else "us"
-    
-        deezer_speed = self.deezer_speed_dropdown.currentData() if service == "deezer" else 7.5
         
         self.worker = DownloadWorker(
             tracks_to_download, 
@@ -1471,8 +1443,7 @@ class SpotiFLACGUI(QWidget):
             self.use_track_numbers,
             self.use_album_subfolders,
             service,
-            qobuz_region,
-            deezer_speed
+            qobuz_region
         )
         self.worker.finished.connect(self.on_download_finished)
         self.worker.progress.connect(self.update_progress)
