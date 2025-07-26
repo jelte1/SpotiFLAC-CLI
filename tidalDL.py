@@ -3,7 +3,7 @@ import json
 import os
 import re
 import time
-import httpx
+import requests
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import PictureType
 
@@ -35,7 +35,7 @@ class TidalDownloader:
         sanitized = re.sub(r'[\\/*?:"<>|]', "", str(filename))
         return re.sub(r'\s+', ' ', sanitized).strip() or "Unnamed Track"
 
-    async def get_access_token(self):
+    def get_access_token(self):
         refresh_url = "https://auth.tidal.com/v1/oauth2/token"
         
         payload = {
@@ -43,68 +43,67 @@ class TidalDownloader:
             "grant_type": "client_credentials",
         }
         
-        async with httpx.AsyncClient(http2=True) as client:
-            try:
-                response = await client.post(
-                    url=refresh_url,
-                    data=payload,
-                    auth=(self.client_id, self.client_secret),
-                )
-                
-                if response.status_code == 200:
-                    token_data = response.json()
-                    return token_data.get("access_token")
-                else:
-                    return None
-                    
-            except:
-                return None
-
-    async def search_tracks(self, query):
         try:
-            tidal_token = await self.get_access_token()
+            response = requests.post(
+                url=refresh_url,
+                data=payload,
+                auth=(self.client_id, self.client_secret),
+                timeout=self.timeout
+            )
+            
+            if response.status_code == 200:
+                token_data = response.json()
+                return token_data.get("access_token")
+            else:
+                return None
+                
+        except:
+            return None
+
+    def search_tracks(self, query):
+        try:
+            tidal_token = self.get_access_token()
             if not tidal_token:
                 raise Exception("Failed to get access token")
 
             search_url = f"https://api.tidal.com/v1/search/tracks?query={query}&limit=25&offset=0&countryCode=US"
             header = {"authorization": f"Bearer {tidal_token}"}
 
-            async with httpx.AsyncClient(http2=True) as client:
-                search_data = await client.get(url=search_url, headers=header)
-                response_data = search_data.json()
-                
-                filtered_items = [{
-                    "id": item.get("id"),
-                    "title": item.get("title"),
-                    "url": item.get("url"),
-                    "isrc": item.get("isrc"),
-                    "audioQuality": item.get("audioQuality"),
-                    "mediaMetadata": item.get("mediaMetadata"),
-                    "album": item.get("album", {}),
-                    "artists": item.get("artists", []),
-                    "artist": item.get("artist", {}),
-                    "trackNumber": item.get("trackNumber"),
-                    "volumeNumber": item.get("volumeNumber"),
-                    "duration": item.get("duration"),
-                    "copyright": item.get("copyright"),
-                    "explicit": item.get("explicit")
-                } for item in response_data.get("items", [])]
-                
-                return {
-                    "limit": response_data.get("limit"),
-                    "offset": response_data.get("offset"),
-                    "totalNumberOfItems": response_data.get("totalNumberOfItems"),
-                    "items": filtered_items
-                }
+            search_data = requests.get(url=search_url, headers=header, timeout=self.timeout)
+            response_data = search_data.json()
+            
+            filtered_items = [{
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "url": item.get("url"),
+                "isrc": item.get("isrc"),
+                "audioQuality": item.get("audioQuality"),
+                "mediaMetadata": item.get("mediaMetadata"),
+                "album": item.get("album", {}),
+                "artists": item.get("artists", []),
+                "artist": item.get("artist", {}),
+                "trackNumber": item.get("trackNumber"),
+                "volumeNumber": item.get("volumeNumber"),
+                "duration": item.get("duration"),
+                "copyright": item.get("copyright"),
+                "explicit": item.get("explicit")
+            } for item in response_data.get("items", [])]
+            
+            return {
+                "limit": response_data.get("limit"),
+                "offset": response_data.get("offset"),
+                "totalNumberOfItems": response_data.get("totalNumberOfItems"),
+                "items": filtered_items
+            }
 
         except Exception as e:
             raise Exception(f"Search error: {str(e)}")
 
-    async def get_track_info(self, query, isrc=None):
+    def get_track_info(self, query, isrc=None):
         print(f"Fetching: {query}" + (f" (ISRC: {isrc})" if isrc else ""))
         
         try:
-            result = await self.search_tracks(query)
+            result = self.search_tracks(query)
             
             if not result or not result.get("items"):
                 raise Exception(f"No tracks found for query: {query}")
@@ -143,99 +142,73 @@ class TidalDownloader:
         except Exception as e:
             raise Exception(f"Error getting track info: {str(e)}")
 
-    async def get_download_url(self, track_id, quality="LOSSLESS"):
+    def get_download_url(self, track_id, quality="LOSSLESS"):
         print("Fetching URL...")
         download_api_url = f"https://hifi.401658.xyz/track/?id={track_id}&quality={quality}"
         
-        async with httpx.AsyncClient(http2=True, timeout=self.timeout) as client:
-            try:
-                response = await client.get(download_api_url)
+        try:
+            response = requests.get(download_api_url, timeout=self.timeout)
+            
+            if response.status_code == 200:
+                data = response.json()
                 
-                if response.status_code == 200:
-                    data = response.json()
-                    
-                    for item in data:
-                        if "OriginalTrackUrl" in item:
-                            print("URL found")
-                            return {
-                                "download_url": item["OriginalTrackUrl"],
-                                "track_info": data[0] if data else {}
-                            }
-                    
-                    raise Exception("Download URL not found in response")
-                else:
-                    raise Exception(f"API returned status code: {response.status_code}")
-                    
-            except Exception as e:
-                raise Exception(f"Error getting download URL: {str(e)}")
+                for item in data:
+                    if "OriginalTrackUrl" in item:
+                        print("URL found")
+                        return {
+                            "download_url": item["OriginalTrackUrl"],
+                            "track_info": data[0] if data else {}
+                        }
+                
+                raise Exception("Download URL not found in response")
+            else:
+                raise Exception(f"API returned status code: {response.status_code}")
+                
+        except Exception as e:
+            raise Exception(f"Error getting download URL: {str(e)}")
 
-    async def download_album_art(self, album_id, size="1280x1280"):
+    def download_album_art(self, album_id, size="1280x1280"):
         try:
             art_url = f"https://resources.tidal.com/images/{album_id.replace('-', '/')}/{size}.jpg"
             
-            async with httpx.AsyncClient(http2=True, timeout=self.timeout) as client:
-                response = await client.get(art_url)
+            response = requests.get(art_url, timeout=self.timeout)
+            
+            if response.status_code == 200:
+                return response.content
+            else:
+                print(f"Failed to download album art: HTTP {response.status_code}")
+                return None
                 
-                if response.status_code == 200:
-                    return response.content
-                else:
-                    print(f"Failed to download album art: HTTP {response.status_code}")
-                    return None
-                    
         except Exception as e:
             print(f"Error downloading album art: {str(e)}")
             return None
 
-    async def download_file(self, url, filepath, is_paused_callback=None, is_stopped_callback=None):
+    def download_file(self, url, filepath, is_paused_callback=None, is_stopped_callback=None):
         temp_filepath = filepath + ".part"
         retry_count = 0
         
         while retry_count <= self.max_retries:
             try:
-                async with httpx.AsyncClient(http2=True, timeout=60.0) as client:
-                    async with client.stream('GET', url) as response:
-                        if response.status_code != 200:
-                            raise Exception(f"HTTP {response.status_code}")
-                            
-                        total_size = int(response.headers.get('content-length', 0))
-                        downloaded_size = 0
-                        start_time = time.time()
-                        last_update_time = start_time
-                        
-                        with open(temp_filepath, 'wb') as f:
-                            async for chunk in response.aiter_bytes(chunk_size=self.download_chunk_size):
-                                if is_stopped_callback and is_stopped_callback():
-                                    f.close()
-                                    if os.path.exists(temp_filepath):
-                                        os.remove(temp_filepath)
-                                    raise Exception("Download stopped")
-                                    
-                                while is_paused_callback and is_paused_callback():
-                                    await asyncio.sleep(0.1)
-                                    if is_stopped_callback and is_stopped_callback():
-                                        f.close()
-                                        if os.path.exists(temp_filepath):
-                                            os.remove(temp_filepath)
-                                        raise Exception("Download stopped")
-                                
-                                f.write(chunk)
-                                downloaded_size += len(chunk)
-                                
-                                current_time = time.time()
-                                if current_time - last_update_time >= 1:
-                                    if total_size > 0:
-                                        progress_percent = (downloaded_size / total_size) * 100
-                                        elapsed_time = current_time - start_time
-                                        speed = downloaded_size / (1024 * 1024 * elapsed_time) if elapsed_time > 0 else 0
-                                        print(f"{progress_percent:.2f}% - {speed:.2f} MB/s")
-                                    else:
-                                        print(f"{downloaded_size / (1024 * 1024):.2f} MB")
-                                    
-                                    last_update_time = current_time
-                                
-                                if self.progress_callback:
-                                    self.progress_callback(downloaded_size, total_size)
-                        
+                response = requests.get(url, timeout=60.0)
+                if response.status_code != 200:
+                    raise Exception(f"HTTP {response.status_code}")
+                
+                if is_stopped_callback and is_stopped_callback():
+                    raise Exception("Download stopped")
+                    
+                while is_paused_callback and is_paused_callback():
+                    time.sleep(0.1)
+                    if is_stopped_callback and is_stopped_callback():
+                        raise Exception("Download stopped")
+                
+                with open(temp_filepath, 'wb') as f:
+                    f.write(response.content)
+                
+                downloaded_size = len(response.content)
+                
+                if self.progress_callback:
+                    self.progress_callback(downloaded_size, downloaded_size)
+                    
                 os.rename(temp_filepath, filepath)
                 print("Download complete")
                 return {"success": True, "size": downloaded_size}
@@ -252,9 +225,9 @@ class TidalDownloader:
                 
                 print(f"Download error (attempt {retry_count}/{self.max_retries}): {str(e)}")
                 print(f"Retrying in {retry_count * 2} seconds...")
-                await asyncio.sleep(retry_count * 2)
+                time.sleep(retry_count * 2)
 
-    async def embed_metadata(self, filepath, track_info, search_info=None):
+    def embed_metadata(self, filepath, track_info, search_info=None):
         try:
             print("Embedding metadata...")
             audio = FLAC(filepath)
@@ -325,7 +298,7 @@ class TidalDownloader:
                 audio["COMMENT"] = f"Tidal {track_info['audioQuality']}"
             
             if album_info.get("cover"):
-                album_art = await self.download_album_art(album_info["cover"])
+                album_art = self.download_album_art(album_info["cover"])
                 if album_art:
                     picture = Picture()
                     picture.data = album_art
@@ -343,14 +316,14 @@ class TidalDownloader:
             print(f"Error embedding metadata: {str(e)}")
             return False
 
-    async def download(self, query, isrc=None, output_dir=".", quality="LOSSLESS", is_paused_callback=None, is_stopped_callback=None):
+    def download(self, query, isrc=None, output_dir=".", quality="LOSSLESS", is_paused_callback=None, is_stopped_callback=None):
         if output_dir != ".":
             try:
                 os.makedirs(output_dir, exist_ok=True)
             except OSError as e:
                 raise Exception(f"Directory error: {e}")
                 
-        track_info = await self.get_track_info(query, isrc)
+        track_info = self.get_track_info(query, isrc)
         track_id = track_info.get("id")
         
         if not track_id:
@@ -376,12 +349,12 @@ class TidalDownloader:
                 print(f"File already exists: {output_filename} ({file_size / (1024 * 1024):.2f} MB)")
                 return output_filename
         
-        download_info = await self.get_download_url(track_id, quality)
+        download_info = self.get_download_url(track_id, quality)
         download_url = download_info["download_url"]
         download_track_info = download_info["track_info"]
         
         print(f"Downloading to: {output_filename}")
-        await self.download_file(
+        self.download_file(
             download_url, 
             output_filename, 
             is_paused_callback=is_paused_callback, 
@@ -390,7 +363,7 @@ class TidalDownloader:
         
         print("Adding metadata...")
         try:
-            await self.embed_metadata(output_filename, download_track_info, track_info)
+            self.embed_metadata(output_filename, download_track_info, track_info)
             print("Metadata saved")
         except Exception as e:
             print(f"Tagging failed: {e}")
@@ -398,7 +371,7 @@ class TidalDownloader:
         print("Done")
         return output_filename
 
-async def main():
+def main():
     print("=== TidalDL - Tidal Downloader ===")
     downloader = TidalDownloader(timeout=30, max_retries=3)
     
@@ -407,7 +380,7 @@ async def main():
     output_dir = "."
     
     try:
-        downloaded_file = await downloader.download(query, isrc, output_dir)
+        downloaded_file = downloader.download(query, isrc, output_dir)
         print(f"Success: File saved as {downloaded_file}")
     except Exception as e:
         print(f"Error: {str(e)}")
@@ -425,4 +398,4 @@ if __name__ == "__main__":
     except:
         pass
         
-    asyncio.run(main())
+    main()

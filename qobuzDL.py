@@ -124,45 +124,25 @@ class QobuzDownloader:
         
         print(f"Downloading...")
         try:
-            with self.session.get(download_url, stream=True, timeout=900) as response, \
-                 open(temp_filename, 'wb') as f:
-                response.raise_for_status()
-                total_size = int(response.headers.get('content-length', 0))
-                downloaded_size = 0
-                start_time = time.time()
-                last_update_time = start_time
+            response = self.session.get(download_url, timeout=900)
+            response.raise_for_status()
+            
+            if is_stopped_callback and is_stopped_callback():
+                raise Exception("Download stopped")
                 
-                for chunk in response.iter_content(chunk_size=self.download_chunk_size):
-                    if is_stopped_callback and is_stopped_callback():
-                        f.close()
-                        if os.path.exists(temp_filename):
-                            os.remove(temp_filename)
-                        raise Exception("Download stopped")
-                        
-                    while is_paused_callback and is_paused_callback():
-                        time.sleep(0.1)
-                        if is_stopped_callback and is_stopped_callback():
-                            f.close()
-                            if os.path.exists(temp_filename):
-                                os.remove(temp_filename)
-                            raise Exception("Download stopped")
-                    f.write(chunk)
-                    downloaded_size += len(chunk)
-                    
-                    current_time = time.time()
-                    if current_time - last_update_time >= 1:
-                        if total_size > 0:
-                            progress_percent = (downloaded_size / total_size) * 100
-                            elapsed_time = current_time - start_time
-                            speed = downloaded_size / (1024 * 1024 * elapsed_time) if elapsed_time > 0 else 0
-                            print(f"{progress_percent:.2f}% - {speed:.2f} MB/s")
-                        else:
-                            print(f"{downloaded_size / (1024 * 1024):.2f} MB")
-                        
-                        last_update_time = current_time
-                        
-                    if self.progress_callback:
-                        self.progress_callback(downloaded_size, total_size)
+            while is_paused_callback and is_paused_callback():
+                time.sleep(0.1)
+                if is_stopped_callback and is_stopped_callback():
+                    raise Exception("Download stopped")
+            
+            with open(temp_filename, 'wb') as f:
+                f.write(response.content)
+            
+            downloaded_size = len(response.content)
+            total_size = downloaded_size
+            
+            if self.progress_callback:
+                self.progress_callback(downloaded_size, total_size)
                         
             os.rename(temp_filename, output_filename)
             print("Download complete")

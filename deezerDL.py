@@ -170,27 +170,22 @@ class DeezerDownloader:
         
         print("Downloading FLAC file...")
         try:
-            response = self.session.get(flac_url, stream=True)
+            response = self.session.get(flac_url)
             response.raise_for_status()
-            
-            total_size = int(response.headers.get('content-length', 0))
-            print(f"File size: {total_size} bytes ({total_size / (1024*1024):.2f} MB)")
             
             safe_title = "".join(c for c in metadata.get('title', 'Unknown') if c.isalnum() or c in (' ', '-', '_')).rstrip()
             safe_artist = "".join(c for c in metadata.get('artists', 'Unknown') if c.isalnum() or c in (' ', '-', '_')).rstrip()
             filename = f"{safe_artist} - {safe_title}.flac"
             file_path = os.path.join(output_dir, filename)
             
-            downloaded = 0
             with open(file_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if self.progress_callback and total_size > 0:
-                        current_mb = downloaded / (1024 * 1024)
-                        total_mb = total_size / (1024 * 1024)
-                        percent = (downloaded / total_size) * 100
-                        self.progress_callback(downloaded, total_size)
+                f.write(response.content)
+            
+            downloaded = len(response.content)
+            print(f"File size: {downloaded} bytes ({downloaded / (1024*1024):.2f} MB)")
+            
+            if self.progress_callback:
+                self.progress_callback(downloaded, downloaded)
             
             print(f"Downloaded: {file_path}")
             
@@ -214,19 +209,29 @@ class DeezerDownloader:
             return False
 
 async def main():
-    if len(sys.argv) != 2:
-        print("Usage: python deezerDL.py <ISRC>")
-        print("Example: python deezerDL.py USUM72409273")
-        return
-    
-    isrc = sys.argv[1]
+    print("=== DeezerDL - Deezer Downloader ===")
     downloader = DeezerDownloader()
     
-    success = await downloader.download_by_isrc(isrc)
+    isrc = "USAT22409172"
+    output_dir = "."
+    
+    success = await downloader.download_by_isrc(isrc, output_dir)
     if success:
         print("Download completed successfully!")
     else:
         print("Download failed!")
 
 if __name__ == "__main__":
+    try:
+        import sys
+        if sys.platform == "win32":
+            import os
+            os.system("chcp 65001 > nul")
+            try:
+                sys.stdout.reconfigure(encoding='utf-8')
+            except:
+                pass
+    except:
+        pass
+        
     asyncio.run(main())

@@ -2,15 +2,17 @@ import sys
 import os
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 import requests
 import re
 import asyncio
 from packaging import version
+import qdarktheme
 
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
     QLabel, QFileDialog, QListWidget, QTextEdit, QTabWidget, QButtonGroup, QRadioButton,
-    QAbstractItemView, QSpacerItem, QSizePolicy, QProgressBar, QCheckBox, QDialog,
+    QAbstractItemView, QProgressBar, QCheckBox, QDialog,
     QDialogButtonBox, QComboBox, QStyledItemDelegate
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl, QTimer, QTime, QSettings, QSize
@@ -82,7 +84,7 @@ class DownloadWorker(QThread):
             filename = f"{track.title}.flac"
         else:
             filename = f"{track.title} - {track.artists}.flac"
-        return re.sub(r'[<>:"/\\|?*]', '_', filename)
+        return re.sub(r'[<>:"/\\|?*]', lambda m: "'" if m.group() == '"' else '_', filename)
 
     def run(self):
         try:
@@ -94,16 +96,12 @@ class DownloadWorker(QThread):
                 downloader = DeezerDownloader()
             else:
                 downloader = TidalDownloader()
-            
             def progress_update(current, total):
                 if total > 0:
                     percent = (current / total) * 100
-                    current_mb = current / (1024 * 1024)
-                    total_mb = total / (1024 * 1024)
-                    self.progress.emit(f"Download progress: {percent:.2f}% ({current_mb:.2f}MB/{total_mb:.2f}MB)", 
-                                    int(percent))
+                    self.progress.emit("", int(percent))
                 else:
-                    self.progress.emit(f"Processing metadata...", 0)
+                    self.progress.emit("Processing metadata...", 0)
             
             downloader.set_progress_callback(progress_update)
             
@@ -133,7 +131,7 @@ class DownloadWorker(QThread):
                     else:
                         new_filename = self.get_formatted_filename(track)
                     
-                    new_filename = re.sub(r'[<>:"/\\|?*]', '_', new_filename)
+                    new_filename = re.sub(r'[<>:"/\\|?*]', lambda m: "'" if m.group() == '"' else '_', new_filename)
                     new_filepath = os.path.join(track_outpath, new_filename)
                     
                     if os.path.exists(new_filepath) and os.path.getsize(new_filepath) > 0:
@@ -169,23 +167,14 @@ class DownloadWorker(QThread):
                         is_paused_callback = lambda: self.is_paused
                         is_stopped_callback = lambda: self.is_stopped
                         
-                        try:
-                            loop = asyncio.get_event_loop()
-                            if loop.is_closed():
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                        except RuntimeError:
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-
-                        download_result_details = loop.run_until_complete(downloader.download(
+                        download_result_details = downloader.download(
                             query=f"{track.title} {track.artists}", 
                             isrc=track.isrc,
                             output_dir=track_outpath,
                             quality="LOSSLESS", 
                             is_paused_callback=is_paused_callback,
                             is_stopped_callback=is_stopped_callback
-                        ))
+                        )
                         
                         if isinstance(download_result_details, str) and os.path.exists(download_result_details): 
                             downloaded_file = download_result_details
@@ -208,16 +197,7 @@ class DownloadWorker(QThread):
                         
                         self.progress.emit(f"Downloading from Deezer with ISRC: {track.isrc}", 0)
                         
-                        try:
-                            loop = asyncio.get_event_loop()
-                            if loop.is_closed():
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                        except RuntimeError:
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                        
-                        success = loop.run_until_complete(downloader.download_by_isrc(track.isrc, track_outpath))
+                        success = asyncio.run(downloader.download_by_isrc(track.isrc, track_outpath))
                         
                         if success:
                             safe_title = "".join(c for c in track.title if c.isalnum() or c in (' ', '-', '_')).rstrip()
@@ -311,26 +291,20 @@ class DownloadWorker(QThread):
 class UpdateDialog(QDialog):
     def __init__(self, current_version, new_version, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Update Available")
+        self.setWindowTitle("Update Now")
         self.setFixedWidth(400)
         self.setModal(True)
 
         layout = QVBoxLayout()
 
-        message = QLabel(f"A new version of SpotiFLAC is available!\n\n"
-                        f"Current version: v{current_version}\n"
-                        f"New version: v{new_version}")
+        message = QLabel(f"SpotiFLAC v{new_version} Available!")
         message.setWordWrap(True)
         layout.addWidget(message)
 
-        self.disable_check = QCheckBox("Turn off update checking")
-        self.disable_check.setCursor(Qt.CursorShape.PointingHandCursor)
-        layout.addWidget(self.disable_check)
-
         button_box = QDialogButtonBox()
-        self.update_button = QPushButton("Update")
+        self.update_button = QPushButton("Check")
         self.update_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button = QPushButton("Later")
         self.cancel_button.setCursor(Qt.CursorShape.PointingHandCursor)
         
         button_box.addButton(self.update_button, QDialogButtonBox.ButtonRole.AcceptRole)
@@ -342,8 +316,6 @@ class UpdateDialog(QDialog):
 
         self.update_button.clicked.connect(self.accept)
         self.cancel_button.clicked.connect(self.reject)
-        
-
 
 class TidalStatusChecker(QThread):
     status_updated = pyqtSignal(bool)
@@ -398,7 +370,7 @@ class StatusIndicatorDelegate(QStyledItemDelegate):
         
         circle_size = 6
         circle_y = option.rect.center().y() - circle_size // 2
-        circle_x = option.rect.right() - circle_size - 10
+        circle_x = option.rect.right() - circle_size - 5
         
         painter.save()
         painter.setPen(Qt.PenStyle.NoPen)
@@ -422,7 +394,7 @@ class ServiceComboBox(QComboBox):
 
         self.tidal_status_timer = QTimer(self)
         self.tidal_status_timer.timeout.connect(self.refresh_tidal_status) 
-        self.tidal_status_timer.start(6000)
+        self.tidal_status_timer.start(60000)  
         
         self.deezer_status_checker = DeezerStatusChecker()
         self.deezer_status_checker.status_updated.connect(self.update_deezer_service_status) 
@@ -431,7 +403,7 @@ class ServiceComboBox(QComboBox):
 
         self.deezer_status_timer = QTimer(self)
         self.deezer_status_timer.timeout.connect(self.refresh_deezer_status) 
-        self.deezer_status_timer.start(6000)
+        self.deezer_status_timer.start(60000)  
         
     def setup_items(self):
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -458,10 +430,10 @@ class ServiceComboBox(QComboBox):
         pixmap.fill(Qt.GlobalColor.transparent)
         pixmap.save(path)
 
-    def update_tidal_service_status(self, is_online): 
+    def update_service_status(self, service_id, is_online):
         for i in range(self.count()):
-            service_id = self.itemData(i, Qt.ItemDataRole.UserRole + 1)
-            if service_id == 'tidal': 
+            current_service_id = self.itemData(i, Qt.ItemDataRole.UserRole + 1)
+            if current_service_id == service_id:
                 service_data = self.itemData(i, Qt.ItemDataRole.UserRole)
                 if isinstance(service_data, dict):
                     service_data['online'] = is_online
@@ -469,24 +441,27 @@ class ServiceComboBox(QComboBox):
                 break 
         self.update()
         
+    def update_tidal_service_status(self, is_online): 
+        self.update_service_status('tidal', is_online)
+        
     def refresh_tidal_status(self):
+        if hasattr(self, 'tidal_status_checker') and self.tidal_status_checker.isRunning():
+            self.tidal_status_checker.quit()
+            self.tidal_status_checker.wait()
+            
         self.tidal_status_checker = TidalStatusChecker() 
         self.tidal_status_checker.status_updated.connect(self.update_tidal_service_status)
         self.tidal_status_checker.error.connect(lambda e: print(f"Tidal status check error: {e}")) 
         self.tidal_status_checker.start()
         
     def update_deezer_service_status(self, is_online): 
-        for i in range(self.count()):
-            service_id = self.itemData(i, Qt.ItemDataRole.UserRole + 1)
-            if service_id == 'deezer': 
-                service_data = self.itemData(i, Qt.ItemDataRole.UserRole)
-                if isinstance(service_data, dict):
-                    service_data['online'] = is_online
-                    self.setItemData(i, service_data, Qt.ItemDataRole.UserRole)
-                break 
-        self.update()
+        self.update_service_status('deezer', is_online)
         
     def refresh_deezer_status(self):
+        if hasattr(self, 'deezer_status_checker') and self.deezer_status_checker.isRunning():
+            self.deezer_status_checker.quit()
+            self.deezer_status_checker.wait()
+            
         self.deezer_status_checker = DeezerStatusChecker() 
         self.deezer_status_checker.status_updated.connect(self.update_deezer_service_status)
         self.deezer_status_checker.error.connect(lambda e: print(f"Deezer status check error: {e}")) 
@@ -525,7 +500,7 @@ class QobuzRegionComboBox(QComboBox):
         
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.check_status)
-        self.status_timer.start(10000)
+        self.status_timer.start(60000)  
         
     def setup_items(self):
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -566,6 +541,12 @@ class QobuzRegionComboBox(QComboBox):
         self.update()
     
     def check_status(self):
+        for region_id, checker in self.status_checkers.items():
+            if checker.isRunning():
+                checker.quit()
+                checker.wait()
+        self.status_checkers.clear()
+        
         for region in self.regions:
             region_id = region['id']
             checker = QobuzStatusChecker(region_id)
@@ -583,13 +564,13 @@ class QobuzRegionComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "4.1"
+        self.current_version = "4.2"
         self.tracks = []
         self.all_tracks = []  
         self.reset_state()
         
         self.settings = QSettings('SpotiFLAC', 'Settings')
-        self.last_output_path = self.settings.value('output_path', os.path.expanduser("~\\Music"))
+        self.last_output_path = self.settings.value('output_path', str(Path.home() / "Music"))
         self.last_url = self.settings.value('spotify_url', '')
         
         self.filename_format = self.settings.value('filename_format', 'title_artist')
@@ -598,6 +579,7 @@ class SpotiFLACGUI(QWidget):
         self.service = self.settings.value('service', 'tidal')
         self.qobuz_region = self.settings.value('qobuz_region', 'us')
         self.check_for_updates = self.settings.value('check_for_updates', True, type=bool)
+        self.current_theme_color = self.settings.value('theme_color', '#2196F3')
         
         self.elapsed_time = QTime(0, 0, 0)
         self.timer = QTimer(self)
@@ -611,6 +593,13 @@ class SpotiFLACGUI(QWidget):
         if self.check_for_updates:
             QTimer.singleShot(0, self.check_updates)
 
+    def set_combobox_value(self, combobox, target_value):
+        for i in range(combobox.count()):
+            if combobox.itemData(i, Qt.ItemDataRole.UserRole + 1) == target_value:
+                combobox.setCurrentIndex(i)
+                return True
+        return False
+
     def check_updates(self):
         try:
             response = requests.get("https://raw.githubusercontent.com/afkarxyz/SpotiFLAC/refs/heads/main/version.json")
@@ -622,9 +611,6 @@ class SpotiFLACGUI(QWidget):
                     dialog = UpdateDialog(self.current_version, new_version, self)
                     result = dialog.exec()
                     
-                    if dialog.disable_check.isChecked():
-                        self.settings.setValue('check_for_updates', False)
-                        self.check_for_updates = False
                     if result == QDialog.DialogCode.Accepted:
                         QDesktopServices.openUrl(QUrl("https://github.com/afkarxyz/SpotiFLAC/releases"))
                         
@@ -682,12 +668,13 @@ class SpotiFLACGUI(QWidget):
         spotify_label.setFixedWidth(100)
         
         self.spotify_url = QLineEdit()
-        self.spotify_url.setPlaceholderText("Please enter the Spotify URL")
+        self.spotify_url.setPlaceholderText("Enter Spotify URL")
         self.spotify_url.setClearButtonEnabled(True)
         self.spotify_url.setText(self.last_url)
         self.spotify_url.textChanged.connect(self.save_url)
         
         self.fetch_btn = QPushButton('Fetch')
+        self.fetch_btn.setFixedWidth(80)
         self.fetch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fetch_btn.clicked.connect(self.fetch_tracks)
         
@@ -730,6 +717,7 @@ class SpotiFLACGUI(QWidget):
         self.setup_dashboard_tab()
         self.setup_process_tab()
         self.setup_settings_tab()
+        self.setup_theme_tab()
         self.setup_about_tab()
 
     def setup_dashboard_tab(self):
@@ -745,6 +733,7 @@ class SpotiFLACGUI(QWidget):
         
         self.setup_track_buttons()
         dashboard_layout.addLayout(self.btn_layout)
+        dashboard_layout.addWidget(self.single_track_container)
 
         dashboard_tab.setLayout(dashboard_layout)
         self.tab_widget.addTab(dashboard_tab, "Dashboard")
@@ -814,7 +803,7 @@ class SpotiFLACGUI(QWidget):
         search_layout.addLayout(search_input_layout)
         
         self.search_widget.setLayout(search_layout)
-        self.search_widget.hide()  
+        self.search_widget.hide()
 
     def setup_track_buttons(self):
         self.btn_layout = QHBoxLayout()
@@ -824,7 +813,7 @@ class SpotiFLACGUI(QWidget):
         self.clear_btn = QPushButton('Clear')
         
         for btn in [self.download_selected_btn, self.download_all_btn, self.remove_btn, self.clear_btn]:
-            btn.setFixedWidth(150)
+            btn.setMinimumWidth(120)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             
         self.download_selected_btn.clicked.connect(self.download_selected)
@@ -834,8 +823,29 @@ class SpotiFLACGUI(QWidget):
         
         self.btn_layout.addStretch()
         for btn in [self.download_selected_btn, self.download_all_btn, self.remove_btn, self.clear_btn]:
-            self.btn_layout.addWidget(btn)
+            self.btn_layout.addWidget(btn, 1)
         self.btn_layout.addStretch()
+        
+        self.single_track_container = QWidget()
+        single_track_layout = QHBoxLayout(self.single_track_container)
+        single_track_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.single_download_btn = QPushButton('Download')
+        self.single_clear_btn = QPushButton('Clear')
+        
+        for btn in [self.single_download_btn, self.single_clear_btn]:
+            btn.setFixedWidth(120)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            
+        self.single_download_btn.clicked.connect(self.download_all)
+        self.single_clear_btn.clicked.connect(self.clear_tracks)
+        
+        single_track_layout.addStretch()
+        single_track_layout.addWidget(self.single_download_btn)
+        single_track_layout.addWidget(self.single_clear_btn)
+        single_track_layout.addStretch()
+        
+        self.single_track_container.hide()
 
     def setup_process_tab(self):
         self.process_tab = QWidget()
@@ -862,13 +872,19 @@ class SpotiFLACGUI(QWidget):
         self.stop_btn = QPushButton('Stop')
         self.pause_resume_btn = QPushButton('Pause')
         
+        self.stop_btn.setFixedWidth(120)
+        self.pause_resume_btn.setFixedWidth(120)
+        
         self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.pause_resume_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         
         self.stop_btn.clicked.connect(self.stop_download)
         self.pause_resume_btn.clicked.connect(self.toggle_pause_resume)
+        
+        control_layout.addStretch()
         control_layout.addWidget(self.stop_btn)
         control_layout.addWidget(self.pause_resume_btn)
+        control_layout.addStretch()
         
         process_layout.addLayout(control_layout)
         
@@ -901,6 +917,7 @@ class SpotiFLACGUI(QWidget):
         self.output_dir.textChanged.connect(self.save_settings)
         
         self.output_browse = QPushButton('Browse')
+        self.output_browse.setFixedWidth(80)
         self.output_browse.setCursor(Qt.CursorShape.PointingHandCursor)
         self.output_browse.clicked.connect(self.browse_output)
         
@@ -1008,15 +1025,8 @@ class SpotiFLACGUI(QWidget):
         settings_layout.addStretch()
         settings_tab.setLayout(settings_layout)
         self.tab_widget.addTab(settings_tab, "Settings")
-        for i in range(self.service_dropdown.count()):
-            if self.service_dropdown.itemData(i, Qt.ItemDataRole.UserRole + 1) == self.service:
-                self.service_dropdown.setCurrentIndex(i)
-                break
-                
-        for i in range(self.qobuz_region_dropdown.count()):
-            if self.qobuz_region_dropdown.itemData(i, Qt.ItemDataRole.UserRole + 1) == self.qobuz_region:
-                self.qobuz_region_dropdown.setCurrentIndex(i)
-                break
+        self.set_combobox_value(self.service_dropdown, self.service)
+        self.set_combobox_value(self.qobuz_region_dropdown, self.qobuz_region)
         
 
         
@@ -1026,18 +1036,189 @@ class SpotiFLACGUI(QWidget):
             lambda region_id, is_online: self.service_dropdown.update_qobuz_status(region_id, is_online)
         )
         
+    def setup_theme_tab(self):
+        theme_tab = QWidget()
+        theme_layout = QVBoxLayout()
+        theme_layout.setSpacing(8)
+        theme_layout.setContentsMargins(15, 15, 15, 15)
+
+        grid_layout = QVBoxLayout()
+        
+        self.color_buttons = {}
+        
+        first_row_palettes = [
+            ("Red", [
+                ("#FFCDD2", "100"), ("#EF9A9A", "200"), ("#E57373", "300"), ("#EF5350", "400"), ("#F44336", "500"), ("#E53935", "600"), ("#D32F2F", "700"), ("#C62828", "800"), ("#B71C1C", "900"), ("#FF8A80", "A100"), ("#FF5252", "A200"), ("#FF1744", "A400"), ("#D50000", "A700")
+            ]),
+            ("Pink", [
+                ("#F8BBD0", "100"), ("#F48FB1", "200"), ("#F06292", "300"), ("#EC407A", "400"), ("#E91E63", "500"), ("#D81B60", "600"), ("#C2185B", "700"), ("#AD1457", "800"), ("#880E4F", "900"), ("#FF80AB", "A100"), ("#FF4081", "A200"), ("#F50057", "A400"), ("#C51162", "A700")
+            ]),
+            ("Purple", [
+                ("#E1BEE7", "100"), ("#CE93D8", "200"), ("#BA68C8", "300"), ("#AB47BC", "400"), ("#9C27B0", "500"), ("#8E24AA", "600"), ("#7B1FA2", "700"), ("#6A1B9A", "800"), ("#4A148C", "900"), ("#EA80FC", "A100"), ("#E040FB", "A200"), ("#D500F9", "A400"), ("#AA00FF", "A700")
+            ])
+        ]
+        
+        second_row_palettes = [
+            ("Deep Purple", [
+                ("#D1C4E9", "100"), ("#B39DDB", "200"), ("#9575CD", "300"), ("#7E57C2", "400"), ("#673AB7", "500"), ("#5E35B1", "600"), ("#512DA8", "700"), ("#4527A0", "800"), ("#311B92", "900"), ("#B388FF", "A100"), ("#7C4DFF", "A200"), ("#651FFF", "A400"), ("#6200EA", "A700")
+            ]),
+            ("Indigo", [
+                ("#C5CAE9", "100"), ("#9FA8DA", "200"), ("#7986CB", "300"), ("#5C6BC0", "400"), ("#3F51B5", "500"), ("#3949AB", "600"), ("#303F9F", "700"), ("#283593", "800"), ("#1A237E", "900"), ("#8C9EFF", "A100"), ("#536DFE", "A200"), ("#3D5AFE", "A400"), ("#304FFE", "A700")
+            ]),
+            ("Blue", [
+                ("#BBDEFB", "100"), ("#90CAF9", "200"), ("#64B5F6", "300"), ("#42A5F5", "400"), ("#2196F3", "500"), ("#1E88E5", "600"), ("#1976D2", "700"), ("#1565C0", "800"), ("#0D47A1", "900"), ("#82B1FF", "A100"), ("#448AFF", "A200"), ("#2979FF", "A400"), ("#2962FF", "A700")
+            ])
+        ]
+        
+        third_row_palettes = [
+            ("Light Blue", [
+                ("#B3E5FC", "100"), ("#81D4FA", "200"), ("#4FC3F7", "300"), ("#29B6F6", "400"), ("#03A9F4", "500"), ("#039BE5", "600"), ("#0288D1", "700"), ("#0277BD", "800"), ("#01579B", "900"), ("#80D8FF", "A100"), ("#40C4FF", "A200"), ("#00B0FF", "A400"), ("#0091EA", "A700")
+            ]),
+            ("Cyan", [
+                ("#B2EBF2", "100"), ("#80DEEA", "200"), ("#4DD0E1", "300"), ("#26C6DA", "400"), ("#00BCD4", "500"), ("#00ACC1", "600"), ("#0097A7", "700"), ("#00838F", "800"), ("#006064", "900"), ("#84FFFF", "A100"), ("#18FFFF", "A200"), ("#00E5FF", "A400"), ("#00B8D4", "A700")
+            ]),
+            ("Teal", [
+                ("#B2DFDB", "100"), ("#80CBC4", "200"), ("#4DB6AC", "300"), ("#26A69A", "400"), ("#009688", "500"), ("#00897B", "600"), ("#00796B", "700"), ("#00695C", "800"), ("#004D40", "900"), ("#A7FFEB", "A100"), ("#64FFDA", "A200"), ("#1DE9B6", "A400"), ("#00BFA5", "A700")
+            ])
+        ]
+        
+        fourth_row_palettes = [
+            ("Green", [
+                ("#C8E6C9", "100"), ("#A5D6A7", "200"), ("#81C784", "300"), ("#66BB6A", "400"), ("#4CAF50", "500"), ("#43A047", "600"), ("#388E3C", "700"), ("#2E7D32", "800"), ("#1B5E20", "900"), ("#B9F6CA", "A100"), ("#69F0AE", "A200"), ("#00E676", "A400"), ("#00C853", "A700")
+            ]),
+            ("Light Green", [
+                ("#DCEDC8", "100"), ("#C5E1A5", "200"), ("#AED581", "300"), ("#9CCC65", "400"), ("#8BC34A", "500"), ("#7CB342", "600"), ("#689F38", "700"), ("#558B2F", "800"), ("#33691E", "900"), ("#CCFF90", "A100"), ("#B2FF59", "A200"), ("#76FF03", "A400"), ("#64DD17", "A700")
+            ]),
+            ("Lime", [
+                ("#F0F4C3", "100"), ("#E6EE9C", "200"), ("#DCE775", "300"), ("#D4E157", "400"), ("#CDDC39", "500"), ("#C0CA33", "600"), ("#AFB42B", "700"), ("#9E9D24", "800"), ("#827717", "900"), ("#F4FF81", "A100"), ("#EEFF41", "A200"), ("#C6FF00", "A400"), ("#AEEA00", "A700")
+            ])
+        ]
+        
+        fifth_row_palettes = [
+            ("Yellow", [
+                ("#FFF9C4", "100"), ("#FFF59D", "200"), ("#FFF176", "300"), ("#FFEE58", "400"), ("#FFEB3B", "500"), ("#FDD835", "600"), ("#FBC02D", "700"), ("#F9A825", "800"), ("#F57F17", "900"), ("#FFFF8D", "A100"), ("#FFFF00", "A200"), ("#FFEA00", "A400"), ("#FFD600", "A700")
+            ]),
+            ("Amber", [
+                ("#FFECB3", "100"), ("#FFE082", "200"), ("#FFD54F", "300"), ("#FFCA28", "400"), ("#FFC107", "500"), ("#FFB300", "600"), ("#FFA000", "700"), ("#FF8F00", "800"), ("#FF6F00", "900"), ("#FFE57F", "A100"), ("#FFD740", "A200"), ("#FFC400", "A400"), ("#FFAB00", "A700")
+            ]),
+            ("Orange", [
+                ("#FFE0B2", "100"), ("#FFCC80", "200"), ("#FFB74D", "300"), ("#FFA726", "400"), ("#FF9800", "500"), ("#FB8C00", "600"), ("#F57C00", "700"), ("#EF6C00", "800"), ("#E65100", "900"), ("#FFD180", "A100"), ("#FFAB40", "A200"), ("#FF9100", "A400"), ("#FF6D00", "A700")
+            ])
+        ]
+        
+        for row_palettes in [first_row_palettes, second_row_palettes, third_row_palettes, fourth_row_palettes, fifth_row_palettes]:
+            row_layout = QHBoxLayout()
+            row_layout.setSpacing(15)
+            
+            for palette_name, colors in row_palettes:
+                column_layout = QVBoxLayout()
+                column_layout.setSpacing(3)
+                
+                palette_label = QLabel(palette_name)
+                palette_label.setStyleSheet("margin-bottom: 2px;")
+                palette_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                column_layout.addWidget(palette_label)
+                
+                color_buttons_layout = QHBoxLayout()
+                color_buttons_layout.setSpacing(3)
+                
+                for color_hex, color_name in colors:
+                    color_btn = QPushButton()
+                    color_btn.setFixedSize(18, 18)
+                    
+                    is_current = color_hex == self.current_theme_color
+                    border_style = "2px solid #fff" if is_current else "none"
+                    
+                    color_btn.setStyleSheet(f"""
+                        QPushButton {{
+                            background-color: {color_hex};
+                            border: {border_style};
+                            border-radius: 9px;
+                        }}
+                        QPushButton:hover {{
+                            border: 2px solid #fff;
+                        }}
+                        QPushButton:pressed {{
+                            border: 2px solid #fff;
+                        }}
+                    """)
+                    color_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                    color_btn.setToolTip(f"{palette_name} {color_name}\n{color_hex}")
+                    color_btn.clicked.connect(lambda checked, color=color_hex, btn=color_btn: self.change_theme_color(color, btn))
+                    
+                    self.color_buttons[color_hex] = color_btn
+                    
+                    color_buttons_layout.addWidget(color_btn)
+                
+                column_layout.addLayout(color_buttons_layout)
+                row_layout.addLayout(column_layout)
+            
+            grid_layout.addLayout(row_layout)
+
+        theme_layout.addLayout(grid_layout)
+        theme_layout.addStretch()
+
+        theme_tab.setLayout(theme_layout)
+        self.tab_widget.addTab(theme_tab, "Theme")
+
+    def change_theme_color(self, color, clicked_btn=None):
+        if hasattr(self, 'color_buttons'):
+            for color_hex, btn in self.color_buttons.items():
+                if color_hex == self.current_theme_color:
+                    btn.setStyleSheet(f"""
+                        QPushButton {{
+                            background-color: {color_hex};
+                            border: none;
+                            border-radius: 9px;
+                        }}
+                        QPushButton:hover {{
+                            border: 2px solid #fff;
+                        }}
+                        QPushButton:pressed {{
+                            border: 2px solid #fff;
+                        }}
+                    """)
+                    break
+        
+        self.current_theme_color = color
+        self.settings.setValue('theme_color', color)
+        self.settings.sync()
+        
+        if clicked_btn:
+            clicked_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {color};
+                    border: 2px solid #fff;
+                    border-radius: 9px;
+                }}
+                QPushButton:hover {{
+                    border: 2px solid #fff;
+                }}
+                QPushButton:pressed {{
+                    border: 2px solid #fff;
+                }}
+            """)
+        
+        qdarktheme.setup_theme(
+            custom_colors={
+                "[dark]": {
+                    "primary": color,
+                }
+            }
+        )
+        
     def setup_about_tab(self):
         about_tab = QWidget()
         about_layout = QVBoxLayout()
         about_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        about_layout.setSpacing(3)
+        about_layout.setSpacing(15)
 
         sections = [
-            ("Check for Updates", "https://github.com/afkarxyz/SpotiFLAC/releases"),
-            ("Report an Issue", "https://github.com/afkarxyz/SpotiFLAC/issues")
+            ("Check for Updates", "Check", "https://github.com/afkarxyz/SpotiFLAC/releases"),
+            ("Report an Issue", "Report", "https://github.com/afkarxyz/SpotiFLAC/issues")
         ]
 
-        for title, url in sections:
+        for title, button_text, url in sections:
             section_widget = QWidget()
             section_layout = QVBoxLayout(section_widget)
             section_layout.setSpacing(10)
@@ -1048,39 +1229,21 @@ class SpotiFLACGUI(QWidget):
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             section_layout.addWidget(label)
 
-            button = QPushButton("Click Here!")
-            button.setFixedWidth(150)
-            button.setStyleSheet("""
-                QPushButton {
-                    background-color: palette(button);
-                    color: palette(button-text);
-                    border: 1px solid palette(mid);
-                    padding: 6px;
-                    border-radius: 15px;
-                }
-                QPushButton:hover {
-                    background-color: palette(light);
-                }
-                QPushButton:pressed {
-                    background-color: palette(midlight);
-                }
-            """)
+            button = QPushButton(button_text)
+            button.setFixedSize(120, 25)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(lambda _, url=url: QDesktopServices.openUrl(QUrl(url if url.startswith(('http://', 'https://')) else f'https://{url}')))
             section_layout.addWidget(button, alignment=Qt.AlignmentFlag.AlignCenter)
 
             about_layout.addWidget(section_widget)
-            
-            if sections.index((title, url)) < len(sections) - 1:
-                spacer = QSpacerItem(20, 6, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-                about_layout.addItem(spacer)
 
-        footer_label = QLabel("v4.1 | July 2025")
-        footer_label.setStyleSheet("font-size: 12px; margin-top: 10px;")
+        footer_label = QLabel(f"v{self.current_version} | July 2025")
+        footer_label.setStyleSheet("font-size: 12px; margin-top: 20px;")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
         about_tab.setLayout(about_layout)
-        self.tab_widget.addTab(about_tab, "About")    
+        self.tab_widget.addTab(about_tab, "About")
+            
     def on_service_changed(self, index):
         service = self.service_dropdown.currentData()
         self.service = service
@@ -1281,8 +1444,7 @@ class SpotiFLACGUI(QWidget):
             'artists': playlist_data["playlist_info"]["owner"]["display_name"],
             'cover': playlist_data["playlist_info"]["owner"]["images"],
             'followers': playlist_data["playlist_info"]["followers"]["total"],
-            'total_tracks': playlist_data["playlist_info"]["tracks"]["total"]
-        }
+            'total_tracks': playlist_data["playlist_info"]["tracks"]["total"]        }
         self.update_display_after_fetch(metadata)
 
     def update_display_after_fetch(self, metadata):
@@ -1364,21 +1526,30 @@ class SpotiFLACGUI(QWidget):
 
     def update_button_states(self):
         if self.is_single_track:
-            self.download_selected_btn.hide()
-            self.remove_btn.hide()
-            self.download_all_btn.setText('Download')
-            self.clear_btn.setText('Clear')
+            for btn in [self.download_selected_btn, self.download_all_btn, self.remove_btn, self.clear_btn]:
+                btn.hide()
+            
+            self.single_track_container.show()
+            
+            self.single_download_btn.setEnabled(True)
+            self.single_clear_btn.setEnabled(True)
+            
         else:
+            self.single_track_container.hide()
+            
             self.download_selected_btn.show()
+            self.download_all_btn.show()
             self.remove_btn.show()
+            self.clear_btn.show()
+            
             self.download_all_btn.setText('Download All')
             self.clear_btn.setText('Clear')
-        
-        self.download_all_btn.show()
-        self.clear_btn.show()
-        
-        self.download_selected_btn.setEnabled(True)
-        self.download_all_btn.setEnabled(True)
+            
+            self.download_all_btn.setMinimumWidth(120)
+            self.clear_btn.setMinimumWidth(120)
+            
+            self.download_selected_btn.setEnabled(True)
+            self.download_all_btn.setEnabled(True)
 
     def hide_track_buttons(self):
         buttons = [
@@ -1389,6 +1560,9 @@ class SpotiFLACGUI(QWidget):
         ]
         for btn in buttons:
             btn.hide()
+        
+        if hasattr(self, 'single_track_container'):
+            self.single_track_container.hide()
 
     def download_selected(self):
         if self.is_single_track:
@@ -1426,8 +1600,7 @@ class SpotiFLACGUI(QWidget):
         try:
             self.start_download_worker(tracks_to_download, outpath)
         except Exception as e:
-            self.log_output.append(f"Error: An error occurred while starting the download: {str(e)}")
-
+            self.log_output.append(f"Error: An error occurred while starting the download: {str(e)}")    
     def start_download_worker(self, tracks_to_download, outpath):
         service = self.service_dropdown.currentData()
         qobuz_region = self.qobuz_region_dropdown.currentData() if service == "qobuz" else "us"
@@ -1454,6 +1627,12 @@ class SpotiFLACGUI(QWidget):
     def update_ui_for_download_start(self):
         self.download_selected_btn.setEnabled(False)
         self.download_all_btn.setEnabled(False)
+        
+        if hasattr(self, 'single_download_btn'):
+            self.single_download_btn.setEnabled(False)
+        if hasattr(self, 'single_clear_btn'):
+            self.single_clear_btn.setEnabled(False)
+            
         self.stop_btn.show()
         self.pause_resume_btn.show()
         self.progress_bar.show()
@@ -1482,7 +1661,6 @@ class SpotiFLACGUI(QWidget):
                 self.log_output.append(message)
         else:
             self.log_output.append(message)
-        
         if percentage > 0 and not "Download progress:" in message:
             self.progress_bar.setValue(percentage)
 
@@ -1501,6 +1679,11 @@ class SpotiFLACGUI(QWidget):
         
         self.download_selected_btn.setEnabled(True)
         self.download_all_btn.setEnabled(True)
+        
+        if hasattr(self, 'single_download_btn'):
+            self.single_download_btn.setEnabled(True)
+        if hasattr(self, 'single_clear_btn'):
+            self.single_clear_btn.setEnabled(True)
         
         if success:
             self.log_output.append(f"\nStatus: {message}")
@@ -1558,6 +1741,31 @@ class SpotiFLACGUI(QWidget):
         self.timer.stop()
         self.time_label.hide()
 
+    def closeEvent(self, event):
+        if hasattr(self, 'timer'):
+            self.timer.stop()
+        
+        if hasattr(self, 'service_dropdown'):
+            for attr_name in ['tidal_status_checker', 'deezer_status_checker']:
+                if hasattr(self.service_dropdown, attr_name):
+                    checker = getattr(self.service_dropdown, attr_name)
+                    if checker.isRunning():
+                        checker.quit()
+                        checker.wait()
+        
+        if hasattr(self, 'qobuz_region_dropdown'):
+            for checker in self.qobuz_region_dropdown.status_checkers.values():
+                if checker.isRunning():
+                    checker.quit()
+                    checker.wait()
+        
+        if hasattr(self, 'worker') and self.worker and self.worker.isRunning():
+            self.worker.stop()
+            self.worker.quit()
+            self.worker.wait()
+        
+        event.accept()
+
 if __name__ == '__main__':
     try:
         if sys.platform == "win32":
@@ -1568,6 +1776,17 @@ if __name__ == '__main__':
         pass
         
     app = QApplication(sys.argv)
+    
+    settings = QSettings('SpotiFLAC', 'Settings')
+    theme_color = settings.value('theme_color', '#2196F3')
+    
+    qdarktheme.setup_theme(
+        custom_colors={
+            "[dark]": {
+                "primary": theme_color,
+            }
+        }
+    )
     ex = SpotiFLACGUI()
     ex.show()
     sys.exit(app.exec())
