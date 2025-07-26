@@ -10,13 +10,11 @@
 
 ## Screenshots
 
-![image](https://github.com/user-attachments/assets/70a5dceb-3374-4255-8f6a-4afb5ee534b0)
+![image](https://github.com/user-attachments/assets/180b8322-ce2d-4842-a5dd-ac4d7b7a5efa)
 
-![image](https://github.com/user-attachments/assets/9f0d6aa5-456b-4a90-b48a-7e0c22819ebd)
+![image](https://github.com/user-attachments/assets/3f84d53b-2da1-4488-986c-772b82832f2d)
 
-![image](https://github.com/user-attachments/assets/be9a79b5-260e-4948-9f72-10c735210ab7)
-
-![image](https://github.com/user-attachments/assets/1feec621-f8bf-4b2a-ae73-afcb1fb1deba)
+![image](https://github.com/user-attachments/assets/f604dc04-4ee6-4084-b314-0be7cd5d7ef9)
 
 ## Lossless Audio Check
 
