@@ -58,9 +58,10 @@ class MetadataFetchWorker(QThread):
 class DownloadWorker(QThread):
     finished = pyqtSignal(bool, str, list)
     progress = pyqtSignal(str, int)
+    
     def __init__(self, tracks, outpath, is_single_track=False, is_album=False, is_playlist=False,
                  album_or_playlist_name='', filename_format='title_artist', use_track_numbers=True,
-                 use_album_subfolders=False, service="tidal", qobuz_region="us"):
+                 use_artist_subfolders=False, use_album_subfolders=False, service="tidal", qobuz_region="us"):
         super().__init__()
         self.tracks = tracks
         self.outpath = outpath
@@ -70,6 +71,7 @@ class DownloadWorker(QThread):
         self.album_or_playlist_name = album_or_playlist_name
         self.filename_format = filename_format
         self.use_track_numbers = use_track_numbers
+        self.use_artist_subfolders = use_artist_subfolders
         self.use_album_subfolders = use_album_subfolders
         self.service = service
         self.qobuz_region = qobuz_region
@@ -91,16 +93,14 @@ class DownloadWorker(QThread):
             if self.service == "qobuz":
                 downloader = QobuzDownloader(self.qobuz_region)
             elif self.service == "tidal": 
-                downloader = TidalDownloader()
+                downloader = TidalDownloader()            
             elif self.service == "deezer":
                 downloader = DeezerDownloader()
             else:
                 downloader = TidalDownloader()
+            
             def progress_update(current, total):
-                if total > 0:
-                    percent = (current / total) * 100
-                    self.progress.emit("", int(percent))
-                else:
+                if total <= 0:
                     self.progress.emit("Processing metadata...", 0)
             
             downloader.set_progress_callback(progress_update)
@@ -114,19 +114,28 @@ class DownloadWorker(QThread):
                     self.msleep(100)
                 if self.is_stopped:
                     return
-
+                
                 self.progress.emit(f"Starting download ({i+1}/{total_tracks}): {track.title} - {track.artists}", 
                                 int((i) / total_tracks * 100))
                 
                 try:
-                    if self.is_playlist and self.use_album_subfolders:
-                        album_folder = re.sub(r'[<>:"/\\|?*]', '_', track.album)
-                        track_outpath = os.path.join(self.outpath, album_folder)
+                    if self.is_playlist:
+                        track_outpath = self.outpath
+                        
+                        if self.use_artist_subfolders:
+                            artist_name = track.artists.split(', ')[0] if ', ' in track.artists else track.artists
+                            artist_folder = re.sub(r'[<>:"/\\|?*]', lambda m: "'" if m.group() == '"' else '_', artist_name)
+                            track_outpath = os.path.join(track_outpath, artist_folder)
+                        
+                        if self.use_album_subfolders:
+                            album_folder = re.sub(r'[<>:"/\\|?*]', lambda m: "'" if m.group() == '"' else '_', track.album)
+                            track_outpath = os.path.join(track_outpath, album_folder)
+                        
                         os.makedirs(track_outpath, exist_ok=True)
                     else:
                         track_outpath = self.outpath
                     
-                    if (self.is_album or (self.is_playlist and self.use_album_subfolders)) and self.use_track_numbers:
+                    if (self.is_album or self.is_playlist) and self.use_track_numbers:
                         new_filename = f"{track.track_number:02d} - {self.get_formatted_filename(track)}"
                     else:
                         new_filename = self.get_formatted_filename(track)
@@ -564,7 +573,7 @@ class QobuzRegionComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "4.2"
+        self.current_version = "4.3"
         self.tracks = []
         self.all_tracks = []  
         self.reset_state()
@@ -575,6 +584,7 @@ class SpotiFLACGUI(QWidget):
         
         self.filename_format = self.settings.value('filename_format', 'title_artist')
         self.use_track_numbers = self.settings.value('use_track_numbers', False, type=bool)
+        self.use_artist_subfolders = self.settings.value('use_artist_subfolders', False, type=bool)
         self.use_album_subfolders = self.settings.value('use_album_subfolders', False, type=bool)
         self.service = self.settings.value('service', 'tidal')
         self.qobuz_region = self.settings.value('qobuz_region', 'us')
@@ -798,7 +808,6 @@ class SpotiFLACGUI(QWidget):
         self.search_input.textChanged.connect(self.filter_tracks)
         self.search_input.setFixedWidth(250)  
         
-        
         search_input_layout.addWidget(self.search_input)
         search_layout.addLayout(search_input_layout)
         
@@ -971,17 +980,23 @@ class SpotiFLACGUI(QWidget):
 
         checkbox_layout = QHBoxLayout()
         
-        self.track_number_checkbox = QCheckBox('Add Track Numbers to Album Files')
-        self.track_number_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.track_number_checkbox.setChecked(self.use_track_numbers)
-        self.track_number_checkbox.toggled.connect(self.save_track_numbering)
-        checkbox_layout.addWidget(self.track_number_checkbox)
+        self.artist_subfolder_checkbox = QCheckBox('Artist Subfolder (Playlist)')
+        self.artist_subfolder_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.artist_subfolder_checkbox.setChecked(self.use_artist_subfolders)
+        self.artist_subfolder_checkbox.toggled.connect(self.save_artist_subfolder_setting)
+        checkbox_layout.addWidget(self.artist_subfolder_checkbox)
         
-        self.album_subfolder_checkbox = QCheckBox('Create Album Subfolders for Playlist Downloads')
+        self.album_subfolder_checkbox = QCheckBox('Album Subfolder (Playlist)')
         self.album_subfolder_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
         self.album_subfolder_checkbox.setChecked(self.use_album_subfolders)
         self.album_subfolder_checkbox.toggled.connect(self.save_album_subfolder_setting)
         checkbox_layout.addWidget(self.album_subfolder_checkbox)
+        
+        self.track_number_checkbox = QCheckBox('Track Number for Album')
+        self.track_number_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.track_number_checkbox.setChecked(self.use_track_numbers)
+        self.track_number_checkbox.toggled.connect(self.save_track_numbering)
+        checkbox_layout.addWidget(self.track_number_checkbox)
         
         checkbox_layout.addStretch()
         file_layout.addLayout(checkbox_layout)
@@ -1016,8 +1031,6 @@ class SpotiFLACGUI(QWidget):
         region_label.hide()
         self.qobuz_region_dropdown.hide()
         
-
-        
         service_fallback_layout.addStretch()
         auth_layout.addLayout(service_fallback_layout)
         
@@ -1026,9 +1039,7 @@ class SpotiFLACGUI(QWidget):
         settings_tab.setLayout(settings_layout)
         self.tab_widget.addTab(settings_tab, "Settings")
         self.set_combobox_value(self.service_dropdown, self.service)
-        self.set_combobox_value(self.qobuz_region_dropdown, self.qobuz_region)
-        
-
+        self.set_combobox_value(self.qobuz_region_dropdown, self.qobuz_region)        
         
         self.update_service_ui()
         
@@ -1237,7 +1248,7 @@ class SpotiFLACGUI(QWidget):
 
             about_layout.addWidget(section_widget)
 
-        footer_label = QLabel(f"v{self.current_version} | July 2025")
+        footer_label = QLabel(f"v{self.current_version} | August 2025")
         footer_label.setStyleSheet("font-size: 12px; margin-top: 20px;")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -1293,6 +1304,12 @@ class SpotiFLACGUI(QWidget):
         self.use_track_numbers = self.track_number_checkbox.isChecked()
         self.settings.setValue('use_track_numbers', self.use_track_numbers)
         self.settings.sync()
+    
+    def save_artist_subfolder_setting(self):
+        self.use_artist_subfolders = self.artist_subfolder_checkbox.isChecked()
+        self.settings.setValue('use_artist_subfolders', self.use_artist_subfolders)
+        self.settings.sync()
+    
     def save_album_subfolder_setting(self):
         self.use_album_subfolders = self.album_subfolder_checkbox.isChecked()
         self.settings.setValue('use_album_subfolders', self.use_album_subfolders)
@@ -1304,8 +1321,6 @@ class SpotiFLACGUI(QWidget):
         self.settings.setValue('qobuz_region', region)
         self.settings.sync()
         self.log_output.append(f"Qobuz region setting saved: {self.qobuz_region_dropdown.currentText()}")
-    
-
     
     def save_settings(self):
         self.settings.setValue('output_path', self.output_dir.text().strip())
@@ -1429,7 +1444,7 @@ class SpotiFLACGUI(QWidget):
                 title=track["name"],
                 artists=track["artists"],
                 album=track["album_name"],
-                track_number=len(self.tracks) + 1,
+                track_number=track.get("track_number", len(self.tracks) + 1),
                 duration_ms=track.get("duration_ms", 0),
                 id=track_id,
                 isrc=track.get("isrc", "")
@@ -1568,7 +1583,7 @@ class SpotiFLACGUI(QWidget):
         if self.is_single_track:
             self.download_all()
         else:
-            selected_items = self.track_list.selectedItems()
+            selected_items = self.track_list.selectedItems()            
             if not selected_items:
                 self.log_output.append('Warning: Please select tracks to download.')
                 return
@@ -1600,7 +1615,8 @@ class SpotiFLACGUI(QWidget):
         try:
             self.start_download_worker(tracks_to_download, outpath)
         except Exception as e:
-            self.log_output.append(f"Error: An error occurred while starting the download: {str(e)}")    
+            self.log_output.append(f"Error: An error occurred while starting the download: {str(e)}")
+    
     def start_download_worker(self, tracks_to_download, outpath):
         service = self.service_dropdown.currentData()
         qobuz_region = self.qobuz_region_dropdown.currentData() if service == "qobuz" else "us"
@@ -1614,6 +1630,7 @@ class SpotiFLACGUI(QWidget):
             self.album_or_playlist_name,
             self.filename_format,
             self.use_track_numbers,
+            self.use_artist_subfolders,
             self.use_album_subfolders,
             service,
             qobuz_region
@@ -1641,27 +1658,9 @@ class SpotiFLACGUI(QWidget):
         self.tab_widget.setCurrentWidget(self.process_tab)
 
     def update_progress(self, message, percentage):
-        if "Download progress:" in message or "Processing metadata..." in message:
-            current_text = self.log_output.toPlainText()
-            
-            if current_text:
-                lines = current_text.split('\n')
-                
-                if "Download progress:" in lines[-1] or "Processing metadata..." in lines[-1]:
-                    lines[-1] = message
-                    
-                    new_text = '\n'.join(lines)
-                    
-                    self.log_output.setPlainText(new_text)
-                    
-                    self.log_output.moveCursor(QTextCursor.MoveOperation.End)
-                else:
-                    self.log_output.append(message)
-            else:
-                self.log_output.append(message)
-        else:
-            self.log_output.append(message)
-        if percentage > 0 and not "Download progress:" in message:
+        self.log_output.append(message)
+        self.log_output.moveCursor(QTextCursor.MoveOperation.End)
+        if percentage > 0:
             self.progress_bar.setValue(percentage)
 
     def stop_download(self):
