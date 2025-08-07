@@ -23,6 +23,7 @@ from getMetadata import get_filtered_data, parse_uri, SpotifyInvalidUrlException
 from qobuzDL import QobuzDownloader
 from tidalDL import TidalDownloader
 from deezerDL import DeezerDownloader
+from amazonDL import LucidaDownloader
 
 @dataclass
 class Track:
@@ -96,6 +97,8 @@ class DownloadWorker(QThread):
                 downloader = TidalDownloader()            
             elif self.service == "deezer":
                 downloader = DeezerDownloader()
+            elif self.service == "amazon":
+                downloader = LucidaDownloader()
             else:
                 downloader = TidalDownloader()
             
@@ -223,6 +226,21 @@ class DownloadWorker(QThread):
                                     raise Exception("Downloaded file not found")
                         else:
                             raise Exception("Deezer download failed")
+                    elif self.service == "amazon":
+                        self.progress.emit(f"Downloading from Amazon Music: {track.title} - {track.artists}", 0)
+                        
+                        is_paused_callback = lambda: self.is_paused
+                        is_stopped_callback = lambda: self.is_stopped
+                        
+                        downloaded_file = downloader.download(
+                            track.id, 
+                            track_outpath,
+                            is_paused_callback=is_paused_callback,
+                            is_stopped_callback=is_stopped_callback
+                        )
+                        
+                        if not downloaded_file or not os.path.exists(downloaded_file):
+                            raise Exception("Amazon Music download failed")
                     else: 
                         track_id = track.id
                         self.progress.emit(f"Getting track info for ID: {track_id} from {self.service}", 0)
@@ -368,6 +386,19 @@ class DeezerStatusChecker(QThread):
             self.error.emit(f"Error checking Deezer status: {str(e)}")
             self.status_updated.emit(False)
 
+class AmazonStatusChecker(QThread):
+    status_updated = pyqtSignal(bool)
+    error = pyqtSignal(str)
+
+    def run(self):
+        try:
+            response = requests.get("https://lucida.to/api/load?url=%2Fapi%2Fcountries%3Fservice%3Damazon", timeout=5)
+            is_online = response.status_code == 200
+            self.status_updated.emit(is_online)
+        except Exception as e:
+            self.error.emit(f"Error checking Amazon Music status: {str(e)}")
+            self.status_updated.emit(False)
+
 class StatusIndicatorDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
         item_data = index.data(Qt.ItemDataRole.UserRole)
@@ -412,7 +443,16 @@ class ServiceComboBox(QComboBox):
 
         self.deezer_status_timer = QTimer(self)
         self.deezer_status_timer.timeout.connect(self.refresh_deezer_status) 
-        self.deezer_status_timer.start(60000)  
+        self.deezer_status_timer.start(60000)
+        
+        self.amazon_status_checker = AmazonStatusChecker()
+        self.amazon_status_checker.status_updated.connect(self.update_amazon_service_status) 
+        self.amazon_status_checker.error.connect(lambda e: print(f"Amazon Music status check error: {e}")) 
+        self.amazon_status_checker.start()
+
+        self.amazon_status_timer = QTimer(self)
+        self.amazon_status_timer.timeout.connect(self.refresh_amazon_status) 
+        self.amazon_status_timer.start(60000)  
         
     def setup_items(self):
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -420,7 +460,8 @@ class ServiceComboBox(QComboBox):
         self.services = [
             {'id': 'qobuz', 'name': 'Qobuz', 'icon': 'qobuz.png', 'online': False},
             {'id': 'tidal', 'name': 'Tidal', 'icon': 'tidal.png', 'online': False},
-            {'id': 'deezer', 'name': 'Deezer', 'icon': 'deezer.png', 'online': False}
+            {'id': 'deezer', 'name': 'Deezer', 'icon': 'deezer.png', 'online': False},
+            {'id': 'amazon', 'name': 'Amazon Music', 'icon': 'amazon.png', 'online': False}
         ]
         
         for service in self.services:
@@ -475,6 +516,19 @@ class ServiceComboBox(QComboBox):
         self.deezer_status_checker.status_updated.connect(self.update_deezer_service_status)
         self.deezer_status_checker.error.connect(lambda e: print(f"Deezer status check error: {e}")) 
         self.deezer_status_checker.start()
+        
+    def update_amazon_service_status(self, is_online): 
+        self.update_service_status('amazon', is_online)
+        
+    def refresh_amazon_status(self):
+        if hasattr(self, 'amazon_status_checker') and self.amazon_status_checker.isRunning():
+            self.amazon_status_checker.quit()
+            self.amazon_status_checker.wait()
+            
+        self.amazon_status_checker = AmazonStatusChecker() 
+        self.amazon_status_checker.status_updated.connect(self.update_amazon_service_status)
+        self.amazon_status_checker.error.connect(lambda e: print(f"Amazon Music status check error: {e}")) 
+        self.amazon_status_checker.start()
         
     def currentData(self, role=Qt.ItemDataRole.UserRole + 1):
         return super().currentData(role)
@@ -573,7 +627,7 @@ class QobuzRegionComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "4.3"
+        self.current_version = "4.4"
         self.tracks = []
         self.all_tracks = []  
         self.reset_state()
