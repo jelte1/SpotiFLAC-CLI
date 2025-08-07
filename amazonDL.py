@@ -110,7 +110,6 @@ class LucidaDownloader:
         self.progress_callback = callback
     
     def download(self, track_id, output_dir, is_paused_callback=None, is_stopped_callback=None):
-        """Download track using Lucida service"""
         try:
             return download_track(track_id, service="amazon", output_dir=output_dir)
         except Exception as e:
