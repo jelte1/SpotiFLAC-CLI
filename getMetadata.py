@@ -15,20 +15,13 @@ def get_random_user_agent():
 
 
 def generate_totp():
-    # url = "https://raw.githubusercontent.com/Thereallo1026/spotify-secrets/refs/heads/main/secrets/secretBytes.json"
+    url = "https://raw.githubusercontent.com/Thereallo1026/spotify-secrets/refs/heads/main/secrets/secretBytes.json"
 
     try:
-        # resp = requests.get(url, timeout=10)
-        # if resp.status_code != 200:
-        #     raise Exception(f"Failed to fetch TOTP secrets from GitHub. Status: {resp.status_code}")
-        secrets_list = [
-            {"version": 31, "secret": [94, 123, 51, 73, 59, 76, 91, 119, 112, 42, 49, 76, 75, 89, 98, 72, 45]},
-            {"version": 32,
-             "secret": [52, 82, 43, 67, 34, 34, 44, 91, 36, 105, 36, 35, 44, 119, 58, 51, 62, 68, 89, 47, 91, 41, 58]},
-            {"version": 33,
-             "secret": [120, 69, 52, 74, 64, 71, 85, 115, 81, 83, 34, 35, 96, 86, 116, 115, 49, 56, 33, 47, 124, 119,
-                        40, 34]},
-        ]
+        resp = requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            raise Exception(f"Failed to fetch TOTP secrets from GitHub. Status: {resp.status_code}")
+        secrets_list = resp.json()
 
         latest_entry = max(secrets_list, key=lambda x: x["version"])
         version = latest_entry["version"]
