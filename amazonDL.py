@@ -5,8 +5,12 @@ import re
 import base64
 import urllib3
 from urllib.parse import unquote
+from random import randrange
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+def get_random_user_agent():
+    return f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_{randrange(11, 15)}_{randrange(4, 9)}) AppleWebKit/{randrange(530, 537)}.{randrange(30, 37)} (KHTML, like Gecko) Chrome/{randrange(80, 105)}.0.{randrange(3000, 4500)}.{randrange(60, 125)} Safari/{randrange(530, 537)}.{randrange(30, 36)}"
 
 def extract_data(html, patterns):
     for pattern in patterns:
@@ -17,7 +21,7 @@ def extract_data(html, patterns):
 def download_track(track_id, service="amazon", output_dir="."):
     client = requests.Session()
     client.verify = False
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    headers = {'User-Agent': get_random_user_agent()}
     
     try:
         spotify_url = f"https://open.spotify.com/track/{track_id}"
@@ -39,7 +43,7 @@ def download_track(track_id, service="amazon", output_dir="."):
             decoded_token = token
         
         clean_url = url.replace('\\/', '/')
-        print(f"Starting download for: {clean_url}")
+        print(f"Fetching: {clean_url}")
         
         request_data = {
             "account": {"id": "auto", "type": "country"},
@@ -61,18 +65,18 @@ def download_track(track_id, service="amazon", output_dir="."):
             raise Exception(f"Request failed: {data.get('error', 'Unknown error')}")
 
         completion_url = f"https://{data['server']}.lucida.to/api/fetch/request/{data['handoff']}"
-        print("Processing track...")
+        print("Fetching URL...")
         
         while True:
             resp = client.get(completion_url, headers=headers).json()
             if resp["status"] == "completed":
-                print("Processing completed!")
+                print("URL found")
                 break
             elif resp["status"] == "error":
                 raise Exception(f"Processing failed: {resp.get('message', 'Unknown error')}")
             elif progress := resp.get("progress"):
                 percent = int((progress.get("current", 0) / progress.get("total", 100)) * 100)
-                print(f"Progress: {percent}%")
+                print(f"\r{percent}%", end="")
             time.sleep(1)
 
         download_url = f"https://{data['server']}.lucida.to/api/fetch/request/{data['handoff']}/download"
@@ -88,14 +92,15 @@ def download_track(track_id, service="amazon", output_dir="."):
                 file_name = file_name.strip()
         
         file_path = os.path.join(output_dir, file_name)
-        print(f"Downloading: {file_name}")
+        print(f"Downloading...")
         
         with open(file_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
         
-        print(f"Download completed: {file_path}")
+        print("Download complete")
+        print("Done")
         return file_path
         
     except Exception as e:
@@ -116,6 +121,7 @@ class LucidaDownloader:
             raise Exception(f"Amazon Music download failed: {str(e)}")
 
 if __name__ == "__main__":
+    print("=== AmazonDL - Amazon Music Downloader ===")
     track_id = "2plbrEY59IikOBgBGLjaoe"
     service = "amazon"
     

@@ -20,7 +20,8 @@ from PyQt6.QtGui import QIcon, QTextCursor, QDesktopServices, QPixmap, QBrush
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 from getMetadata import get_filtered_data, parse_uri, SpotifyInvalidUrlException
-from qobuzDL import QobuzDownloader
+from qobuzAutoDL import QobuzDownloader as QobuzAutoDownloader
+from qobuzRegionDL import QobuzDownloader as QobuzRegionDownloader
 from tidalDL import TidalDownloader
 from deezerDL import DeezerDownloader
 from amazonDL import LucidaDownloader
@@ -35,6 +36,7 @@ class Track:
     duration_ms: int
     id: str
     isrc: str = ""
+    release_date: str = ""
 
 class MetadataFetchWorker(QThread):
     finished = pyqtSignal(dict)
@@ -62,7 +64,7 @@ class DownloadWorker(QThread):
     
     def __init__(self, tracks, outpath, is_single_track=False, is_album=False, is_playlist=False,
                  album_or_playlist_name='', filename_format='title_artist', use_track_numbers=True,
-                 use_artist_subfolders=False, use_album_subfolders=False, service="tidal", qobuz_region="us"):
+                 use_artist_subfolders=False, use_album_subfolders=False, service="tidal", qobuz_region="us", qobuz_mode="auto"):
         super().__init__()
         self.tracks = tracks
         self.outpath = outpath
@@ -76,6 +78,7 @@ class DownloadWorker(QThread):
         self.use_album_subfolders = use_album_subfolders
         self.service = service
         self.qobuz_region = qobuz_region
+        self.qobuz_mode = qobuz_mode
         self.is_paused = False
         self.is_stopped = False
         self.failed_tracks = []
@@ -92,7 +95,10 @@ class DownloadWorker(QThread):
     def run(self):
         try:
             if self.service == "qobuz":
-                downloader = QobuzDownloader(self.qobuz_region)
+                if self.qobuz_mode == "auto":
+                    downloader = QobuzAutoDownloader()
+                else:
+                    downloader = QobuzRegionDownloader(self.qobuz_region)
             elif self.service == "tidal": 
                 downloader = TidalDownloader()            
             elif self.service == "deezer":
@@ -361,13 +367,17 @@ class QobuzStatusChecker(QThread):
     status_updated = pyqtSignal(bool)
     error = pyqtSignal(str)
     
-    def __init__(self, region="us"):
+    def __init__(self, region="us", mode="auto"):
         super().__init__()
         self.region = region
+        self.mode = mode
     
     def run(self):
         try:
-            response = requests.get(f"https://{self.region}.qobuz.squid.wtf", timeout=5)
+            if self.mode == "auto":
+                response = requests.get("https://qobuz.squid.wtf", timeout=5)
+            else:
+                response = requests.get(f"https://{self.region}.qqdl.site", timeout=5)
             self.status_updated.emit(response.status_code == 200)
         except Exception as e:
             self.error.emit(f"Error checking Qobuz status: {str(e)}")
@@ -569,8 +579,11 @@ class QobuzRegionComboBox(QComboBox):
         current_dir = os.path.dirname(os.path.abspath(__file__))
         
         self.regions = [
+            {'id': 'us', 'name': 'USA', 'icon': 'us.svg', 'online': False},
             {'id': 'eu', 'name': 'Europe', 'icon': 'eu.svg', 'online': False},
-            {'id': 'us', 'name': 'North America', 'icon': 'us.svg', 'online': False}
+            {'id': 'br', 'name': 'Brazil', 'icon': 'br.svg', 'online': False},
+            {'id': 'jp', 'name': 'Japan', 'icon': 'jp.svg', 'online': False},
+            {'id': 'au', 'name': 'Australia', 'icon': 'au.svg', 'online': False}
         ]
         
         for region in self.regions:
@@ -612,7 +625,7 @@ class QobuzRegionComboBox(QComboBox):
         
         for region in self.regions:
             region_id = region['id']
-            checker = QobuzStatusChecker(region_id)
+            checker = QobuzStatusChecker(region_id, "region")
             checker.status_updated.connect(lambda status, rid=region_id: self.handle_status_update(rid, status))
             checker.start()
             self.status_checkers[region_id] = checker
@@ -627,7 +640,7 @@ class QobuzRegionComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "4.4"
+        self.current_version = "4.5"
         self.tracks = []
         self.all_tracks = []  
         self.reset_state()
@@ -642,8 +655,11 @@ class SpotiFLACGUI(QWidget):
         self.use_album_subfolders = self.settings.value('use_album_subfolders', False, type=bool)
         self.service = self.settings.value('service', 'tidal')
         self.qobuz_region = self.settings.value('qobuz_region', 'us')
+        self.qobuz_mode = self.settings.value('qobuz_mode', 'auto')
         self.check_for_updates = self.settings.value('check_for_updates', True, type=bool)
         self.current_theme_color = self.settings.value('theme_color', '#2196F3')
+        self.track_list_format = self.settings.value('track_list_format', 'track_artist_date_duration')
+        self.date_format = self.settings.value('date_format', 'dd_mm_yyyy')
         
         self.elapsed_time = QTime(0, 0, 0)
         self.timer = QTimer(self)
@@ -660,6 +676,9 @@ class SpotiFLACGUI(QWidget):
     def set_combobox_value(self, combobox, target_value):
         for i in range(combobox.count()):
             if combobox.itemData(i, Qt.ItemDataRole.UserRole + 1) == target_value:
+                combobox.setCurrentIndex(i)
+                return True
+            if combobox.itemData(i, Qt.ItemDataRole.UserRole) == target_value:
                 combobox.setCurrentIndex(i)
                 return True
         return False
@@ -762,11 +781,74 @@ class SpotiFLACGUI(QWidget):
         
         self.update_track_list_display()
 
+    def format_track_date(self, release_date):
+        if not release_date:
+            return ""
+        
+        try:
+            if len(release_date) == 4:
+                date_obj = datetime.strptime(release_date, "%Y")
+                if self.date_format == "yyyy":
+                    return date_obj.strftime('%Y')
+                else:
+                    return date_obj.strftime('%Y')
+            elif len(release_date) == 7:
+                date_obj = datetime.strptime(release_date, "%Y-%m")
+                if self.date_format == "dd_mm_yyyy":
+                    return date_obj.strftime('%m-%Y')
+                elif self.date_format == "yyyy_mm_dd":
+                    return date_obj.strftime('%Y-%m')
+                else:
+                    return date_obj.strftime('%Y')
+            else:
+                date_obj = datetime.strptime(release_date, "%Y-%m-%d")
+                if self.date_format == "dd_mm_yyyy":
+                    return date_obj.strftime('%d-%m-%Y')
+                elif self.date_format == "yyyy_mm_dd":
+                    return date_obj.strftime('%Y-%m-%d')
+                else:
+                    return date_obj.strftime('%Y')
+        except ValueError:
+            return release_date
+
     def update_track_list_display(self):
         self.track_list.clear()
         for i, track in enumerate(self.tracks, 1):
             duration = self.format_duration(track.duration_ms)
-            self.track_list.addItem(f"{i}. {track.title} - {track.artists} • {duration}")
+            formatted_date = self.format_track_date(track.release_date)
+            
+            if self.track_list_format == "artist_track_date_duration":
+                display_parts = [f"{i}. {track.artists} - {track.title}"]
+                if formatted_date:
+                    display_parts.append(formatted_date)
+                display_parts.append(duration)
+                display_text = " • ".join(display_parts)
+            elif self.track_list_format == "track_artist_date":
+                display_parts = [f"{i}. {track.title} - {track.artists}"]
+                if formatted_date:
+                    display_parts.append(formatted_date)
+                display_text = " • ".join(display_parts)
+            elif self.track_list_format == "artist_track_date":
+                display_parts = [f"{i}. {track.artists} - {track.title}"]
+                if formatted_date:
+                    display_parts.append(formatted_date)
+                display_text = " • ".join(display_parts)
+            elif self.track_list_format == "track_artist_duration":
+                display_text = f"{i}. {track.title} - {track.artists} • {duration}"
+            elif self.track_list_format == "artist_track_duration":
+                display_text = f"{i}. {track.artists} - {track.title} • {duration}"
+            elif self.track_list_format == "track_artist":
+                display_text = f"{i}. {track.title} - {track.artists}"
+            elif self.track_list_format == "artist_track":
+                display_text = f"{i}. {track.artists} - {track.title}"
+            else:
+                display_parts = [f"{i}. {track.title} - {track.artists}"]
+                if formatted_date:
+                    display_parts.append(formatted_date)
+                display_parts.append(duration)
+                display_text = " • ".join(display_parts)
+            
+            self.track_list.addItem(display_text)
 
     def browse_output(self):
         directory = QFileDialog.getExistingDirectory(self, "Select Output Directory")
@@ -963,15 +1045,16 @@ class SpotiFLACGUI(QWidget):
     def setup_settings_tab(self):
         settings_tab = QWidget()
         settings_layout = QVBoxLayout()
-        settings_layout.setSpacing(10)
-        settings_layout.setContentsMargins(9, 9, 9, 9)
+        settings_layout.setSpacing(4)
+        settings_layout.setContentsMargins(10, 10, 10, 10)
 
         output_group = QWidget()
         output_layout = QVBoxLayout(output_group)
-        output_layout.setSpacing(5)
+        output_layout.setSpacing(2)
+        output_layout.setContentsMargins(0, 0, 0, 0)
         
         output_label = QLabel('Output Directory')
-        output_label.setStyleSheet("font-weight: bold;")
+        output_label.setStyleSheet("font-weight: bold; margin-top: 0px; margin-bottom: 5px;")
         output_layout.addWidget(output_label)
         
         output_dir_layout = QHBoxLayout()
@@ -985,18 +1068,67 @@ class SpotiFLACGUI(QWidget):
         self.output_browse.clicked.connect(self.browse_output)
         
         output_dir_layout.addWidget(self.output_dir)
+        output_dir_layout.addSpacing(5)
         output_dir_layout.addWidget(self.output_browse)
         
         output_layout.addLayout(output_dir_layout)
         
         settings_layout.addWidget(output_group)
 
+        dashboard_group = QWidget()
+        dashboard_layout = QVBoxLayout(dashboard_group)
+        dashboard_layout.setSpacing(3)
+        dashboard_layout.setContentsMargins(0, 0, 0, 0)
+        
+        dashboard_label = QLabel('Dashboard Settings')
+        dashboard_label.setStyleSheet("font-weight: bold; margin-top: 8px; margin-bottom: 5px;")
+        dashboard_layout.addWidget(dashboard_label)
+        
+        dashboard_controls_layout = QHBoxLayout()
+        
+        list_format_label = QLabel('Track List View:')
+        list_format_label.setFixedWidth(90)
+        
+        self.track_list_format_dropdown = QComboBox()
+        self.track_list_format_dropdown.addItem("Track - Artist - Date - Duration", "track_artist_date_duration")
+        self.track_list_format_dropdown.addItem("Artist - Track - Date - Duration", "artist_track_date_duration")
+        self.track_list_format_dropdown.addItem("Track - Artist - Date", "track_artist_date")
+        self.track_list_format_dropdown.addItem("Artist - Track - Date", "artist_track_date")
+        self.track_list_format_dropdown.addItem("Track - Artist - Duration", "track_artist_duration")
+        self.track_list_format_dropdown.addItem("Artist - Track - Duration", "artist_track_duration")
+        self.track_list_format_dropdown.addItem("Track - Artist", "track_artist")
+        self.track_list_format_dropdown.addItem("Artist - Track", "artist_track")
+        self.track_list_format_dropdown.currentIndexChanged.connect(self.save_track_list_format)
+        
+        dashboard_controls_layout.addWidget(list_format_label)
+        dashboard_controls_layout.addWidget(self.track_list_format_dropdown)
+        
+        dashboard_controls_layout.addSpacing(15)
+        
+        date_format_label = QLabel('Date Format:')
+        date_format_label.setFixedWidth(80)
+        
+        self.date_format_dropdown = QComboBox()
+        self.date_format_dropdown.addItem("DD-MM-YYYY", "dd_mm_yyyy")
+        self.date_format_dropdown.addItem("YYYY-MM-DD", "yyyy_mm_dd")
+        self.date_format_dropdown.addItem("YYYY", "yyyy")
+        self.date_format_dropdown.currentIndexChanged.connect(self.save_date_format)
+        
+        dashboard_controls_layout.addWidget(date_format_label)
+        dashboard_controls_layout.addWidget(self.date_format_dropdown)
+        dashboard_controls_layout.addStretch()
+        
+        dashboard_layout.addLayout(dashboard_controls_layout)
+        
+        settings_layout.addWidget(dashboard_group)
+
         file_group = QWidget()
         file_layout = QVBoxLayout(file_group)
-        file_layout.setSpacing(5)
+        file_layout.setSpacing(2)
+        file_layout.setContentsMargins(0, 0, 0, 0)
         
         file_label = QLabel('File Settings')
-        file_label.setStyleSheet("font-weight: bold;")
+        file_label.setStyleSheet("font-weight: bold; margin-top: 8px; margin-bottom: 5px;")
         file_layout.addWidget(file_label)
         
         format_layout = QHBoxLayout()
@@ -1027,7 +1159,9 @@ class SpotiFLACGUI(QWidget):
         
         format_layout.addWidget(format_label)
         format_layout.addWidget(self.title_artist_radio)
+        format_layout.addSpacing(10)
         format_layout.addWidget(self.artist_title_radio)
+        format_layout.addSpacing(10)
         format_layout.addWidget(self.title_only_radio)
         format_layout.addStretch()
         file_layout.addLayout(format_layout)
@@ -1039,14 +1173,16 @@ class SpotiFLACGUI(QWidget):
         self.artist_subfolder_checkbox.setChecked(self.use_artist_subfolders)
         self.artist_subfolder_checkbox.toggled.connect(self.save_artist_subfolder_setting)
         checkbox_layout.addWidget(self.artist_subfolder_checkbox)
+        checkbox_layout.addSpacing(10)
         
         self.album_subfolder_checkbox = QCheckBox('Album Subfolder (Playlist)')
         self.album_subfolder_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
         self.album_subfolder_checkbox.setChecked(self.use_album_subfolders)
         self.album_subfolder_checkbox.toggled.connect(self.save_album_subfolder_setting)
         checkbox_layout.addWidget(self.album_subfolder_checkbox)
+        checkbox_layout.addSpacing(10)
         
-        self.track_number_checkbox = QCheckBox('Track Number for Album')
+        self.track_number_checkbox = QCheckBox('Track Number')
         self.track_number_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
         self.track_number_checkbox.setChecked(self.use_track_numbers)
         self.track_number_checkbox.toggled.connect(self.save_track_numbering)
@@ -1059,10 +1195,11 @@ class SpotiFLACGUI(QWidget):
 
         auth_group = QWidget()
         auth_layout = QVBoxLayout(auth_group)
-        auth_layout.setSpacing(5)
+        auth_layout.setSpacing(2)
+        auth_layout.setContentsMargins(0, 0, 0, 0)
         
         auth_label = QLabel('Service Settings')
-        auth_label.setStyleSheet("font-weight: bold;")
+        auth_label.setStyleSheet("font-weight: bold; margin-top: 8px; margin-bottom: 5px;")
         auth_layout.addWidget(auth_label)
 
         service_fallback_layout = QHBoxLayout()
@@ -1076,13 +1213,25 @@ class SpotiFLACGUI(QWidget):
         
         service_fallback_layout.addSpacing(10)
 
-        region_label = QLabel('Region:')
+        self.qobuz_mode_label = QLabel('Mode:')
+        self.qobuz_mode_dropdown = QComboBox()
+        self.qobuz_mode_dropdown.addItem("Auto", "auto")
+        self.qobuz_mode_dropdown.addItem("Region", "region")
+        self.qobuz_mode_dropdown.currentIndexChanged.connect(self.on_qobuz_mode_changed)
+        service_fallback_layout.addWidget(self.qobuz_mode_label)
+        service_fallback_layout.addWidget(self.qobuz_mode_dropdown)
+        
+        service_fallback_layout.addSpacing(10)
+
+        self.region_label = QLabel('Region:')
         self.qobuz_region_dropdown = QobuzRegionComboBox()
         self.qobuz_region_dropdown.currentIndexChanged.connect(self.save_qobuz_region_setting)
-        service_fallback_layout.addWidget(region_label)
+        service_fallback_layout.addWidget(self.region_label)
         service_fallback_layout.addWidget(self.qobuz_region_dropdown)
         
-        region_label.hide()
+        self.qobuz_mode_label.hide()
+        self.qobuz_mode_dropdown.hide()
+        self.region_label.hide()
         self.qobuz_region_dropdown.hide()
         
         service_fallback_layout.addStretch()
@@ -1093,7 +1242,10 @@ class SpotiFLACGUI(QWidget):
         settings_tab.setLayout(settings_layout)
         self.tab_widget.addTab(settings_tab, "Settings")
         self.set_combobox_value(self.service_dropdown, self.service)
-        self.set_combobox_value(self.qobuz_region_dropdown, self.qobuz_region)        
+        self.set_combobox_value(self.qobuz_region_dropdown, self.qobuz_region)
+        self.set_combobox_value(self.qobuz_mode_dropdown, self.qobuz_mode)
+        self.set_combobox_value(self.track_list_format_dropdown, self.track_list_format)
+        self.set_combobox_value(self.date_format_dropdown, self.date_format)
         
         self.update_service_ui()
         
@@ -1105,7 +1257,7 @@ class SpotiFLACGUI(QWidget):
         theme_tab = QWidget()
         theme_layout = QVBoxLayout()
         theme_layout.setSpacing(8)
-        theme_layout.setContentsMargins(15, 15, 15, 15)
+        theme_layout.setContentsMargins(8, 15, 15, 15)
 
         grid_layout = QVBoxLayout()
         
@@ -1302,8 +1454,7 @@ class SpotiFLACGUI(QWidget):
 
             about_layout.addWidget(section_widget)
 
-        footer_label = QLabel(f"v{self.current_version} | August 2025")
-        footer_label.setStyleSheet("font-size: 12px; margin-top: 20px;")
+        footer_label = QLabel(f"v{self.current_version} | September 2025")
         about_layout.addWidget(footer_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
         about_tab.setLayout(about_layout)
@@ -1318,26 +1469,38 @@ class SpotiFLACGUI(QWidget):
         self.update_service_ui()
         self.log_output.append(f"Service changed to: {self.service_dropdown.currentText()}")
 
+    def on_qobuz_mode_changed(self, index):
+        mode = self.qobuz_mode_dropdown.currentData()
+        self.qobuz_mode = mode
+        self.settings.setValue('qobuz_mode', mode)
+        self.settings.sync()
+        
+        self.update_qobuz_mode_ui()
+        self.log_output.append(f"Qobuz mode changed to: {self.qobuz_mode_dropdown.currentText()}")
+
     def update_service_ui(self):
         service = self.service
-        
-        region_label = None
-        for widget in self.qobuz_region_dropdown.parentWidget().children():
-            if isinstance(widget, QLabel) and widget.text() == "Region:":
-                region_label = widget
-                break
 
         if service == "qobuz":
-            if region_label:
-                region_label.show()
-            self.qobuz_region_dropdown.show()
-        elif service == "deezer":
-            if region_label:
-                region_label.hide()
-            self.qobuz_region_dropdown.hide()
+            self.qobuz_mode_label.show()
+            self.qobuz_mode_dropdown.show()
+            self.update_qobuz_mode_ui()
         else:
-            if region_label:
-                region_label.hide()
+            self.qobuz_mode_label.hide()
+            self.qobuz_mode_dropdown.hide()
+            self.region_label.hide()
+            self.qobuz_region_dropdown.hide()
+
+    def update_qobuz_mode_ui(self):
+        mode = self.qobuz_mode_dropdown.currentData()
+        if mode is None:
+            mode = self.qobuz_mode
+        
+        if mode == "region":
+            self.region_label.show()
+            self.qobuz_region_dropdown.show()
+        else:
+            self.region_label.hide()
             self.qobuz_region_dropdown.hide()
 
     def save_url(self):
@@ -1375,6 +1538,22 @@ class SpotiFLACGUI(QWidget):
         self.settings.setValue('qobuz_region', region)
         self.settings.sync()
         self.log_output.append(f"Qobuz region setting saved: {self.qobuz_region_dropdown.currentText()}")
+    
+    def save_track_list_format(self):
+        format_value = self.track_list_format_dropdown.currentData()
+        self.track_list_format = format_value
+        self.settings.setValue('track_list_format', format_value)
+        self.settings.sync()
+        if self.tracks:
+            self.update_track_list_display()
+    
+    def save_date_format(self):
+        format_value = self.date_format_dropdown.currentData()
+        self.date_format = format_value
+        self.settings.setValue('date_format', format_value)
+        self.settings.sync()
+        if self.tracks:
+            self.update_track_list_display()
     
     def save_settings(self):
         self.settings.setValue('output_path', self.output_dir.text().strip())
@@ -1437,7 +1616,8 @@ class SpotiFLACGUI(QWidget):
             track_number=1,
             duration_ms=track_data.get("duration_ms", 0),
             id=track_id,
-            isrc=track_data.get("isrc", "")
+            isrc=track_data.get("isrc", ""),
+            release_date=track_data.get("release_date", "")
         )
         
         self.tracks = [track]
@@ -1470,7 +1650,8 @@ class SpotiFLACGUI(QWidget):
                 track_number=track["track_number"],
                 duration_ms=track.get("duration_ms", 0),
                 id=track_id,
-                isrc=track.get("isrc", "")
+                isrc=track.get("isrc", ""),
+                release_date=track.get("release_date", "")
             ))
         
         self.all_tracks = self.tracks.copy()
@@ -1501,7 +1682,8 @@ class SpotiFLACGUI(QWidget):
                 track_number=track.get("track_number", len(self.tracks) + 1),
                 duration_ms=track.get("duration_ms", 0),
                 id=track_id,
-                isrc=track.get("isrc", "")
+                isrc=track.get("isrc", ""),
+                release_date=track.get("release_date", "")
             ))
         
         self.all_tracks = self.tracks.copy()
@@ -1674,6 +1856,7 @@ class SpotiFLACGUI(QWidget):
     def start_download_worker(self, tracks_to_download, outpath):
         service = self.service_dropdown.currentData()
         qobuz_region = self.qobuz_region_dropdown.currentData() if service == "qobuz" else "us"
+        qobuz_mode = self.qobuz_mode_dropdown.currentData() if service == "qobuz" else "auto"
         
         self.worker = DownloadWorker(
             tracks_to_download, 
@@ -1687,7 +1870,8 @@ class SpotiFLACGUI(QWidget):
             self.use_artist_subfolders,
             self.use_album_subfolders,
             service,
-            qobuz_region
+            qobuz_region,
+            qobuz_mode
         )
         self.worker.finished.connect(self.on_download_finished)
         self.worker.progress.connect(self.update_progress)
@@ -1773,9 +1957,7 @@ class SpotiFLACGUI(QWidget):
                 if track in self.all_tracks:
                     self.all_tracks.remove(track)
             
-            if self.is_playlist:
-                for i, track in enumerate(self.all_tracks, 1):
-                    track.track_number = i
+
             
             self.update_track_list_display()
 

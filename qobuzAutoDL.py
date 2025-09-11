@@ -5,6 +5,10 @@ import re
 from datetime import datetime
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import PictureType
+from random import randrange
+
+def get_random_user_agent():
+    return f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_{randrange(11, 15)}_{randrange(4, 9)}) AppleWebKit/{randrange(530, 537)}.{randrange(30, 37)} (KHTML, like Gecko) Chrome/{randrange(80, 105)}.0.{randrange(3000, 4500)}.{randrange(60, 125)} Safari/{randrange(530, 537)}.{randrange(30, 36)}"
 
 class ProgressCallback:
     def __call__(self, current, total):
@@ -15,17 +19,13 @@ class ProgressCallback:
             print(f"\r{current / (1024 * 1024):.2f} MB", end="")
 
 class QobuzDownloader:
-    def __init__(self, region="us", timeout=30):
-        if region not in ["eu", "us"]:
-            raise ValueError("Region must be either 'us' or 'eu'")
-            
-        self.region = region
+    def __init__(self, timeout=30):
         self.timeout = timeout
         self.session = requests.Session()
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': get_random_user_agent()
         }
-        self.base_api_url = f"https://{region}.qobuz.squid.wtf/api"
+        self.base_api_url = "https://qobuz.squid.wtf/api"
         self.download_chunk_size = 256 * 1024
         self.progress_callback = ProgressCallback()
 
@@ -41,7 +41,7 @@ class QobuzDownloader:
     def get_track_info(self, isrc):
         print(f"Fetching: {isrc}")
         search_url = f"{self.base_api_url}/get-music"
-        params = {'q': isrc, 'offset': 0, 'limit': 10}
+        params = {'q': isrc, 'offset': 0, 'limit': 10, 'region': 'auto'}
         
         try:
             response = self.session.get(search_url, params=params, timeout=self.timeout)
@@ -76,7 +76,7 @@ class QobuzDownloader:
     def get_download_url(self, track_id):
         print("Fetching URL...")
         download_api_url = f"{self.base_api_url}/download-music"
-        params = {'track_id': track_id, 'quality': 27}
+        params = {'track_id': track_id, 'quality': 27, 'region': 'auto'}
         
         try:
             response = self.session.get(download_api_url, params=params, timeout=self.timeout)
@@ -223,8 +223,8 @@ class QobuzDownloader:
             raise Exception(f"Metadata error: {e}")
 
 def main():
-    print("=== QobuzDL - Qobuz Downloader ===")
-    downloader = QobuzDownloader(region="us")
+    print("=== QobuzDL - Qobuz Downloader (Auto) ===")
+    downloader = QobuzDownloader()
     
     isrc = "USAT22409172"
     output_dir = "."
