@@ -97,6 +97,9 @@ def parse_uri(uri):
     if parts[1] == "embed":
         parts = parts[1:]
 
+    if len(parts) > 1 and parts[1].startswith("intl-"):
+        parts = parts[1:]
+
     l = len(parts)
     if l == 3 and parts[1] in ["album", "track", "playlist"]:
         return {"type": parts[1], "id": parts[2]}
