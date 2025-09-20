@@ -144,7 +144,7 @@ class TidalDownloader:
 
     def get_download_url(self, track_id, quality="LOSSLESS"):
         print("Fetching URL...")
-        download_api_url = f"https://hifi.401658.xyz/track/?id={track_id}&quality={quality}"
+        download_api_url = f"https://tidal.401658.xyz/track/?id={track_id}&quality={quality}"
         
         try:
             response = requests.get(download_api_url, timeout=self.timeout)

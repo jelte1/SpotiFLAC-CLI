@@ -57,6 +57,8 @@ token_url = 'https://open.spotify.com/api/token'
 playlist_base_url = 'https://api.spotify.com/v1/playlists/{}'
 album_base_url = 'https://api.spotify.com/v1/albums/{}'
 track_base_url = 'https://api.spotify.com/v1/tracks/{}'
+artist_base_url = 'https://api.spotify.com/v1/artists/{}'
+artist_albums_url = 'https://api.spotify.com/v1/artists/{}/albums'
 headers = {
     'User-Agent': get_random_user_agent(),
     'Accept': 'application/json',
@@ -101,10 +103,18 @@ def parse_uri(uri):
         parts = parts[1:]
 
     l = len(parts)
-    if l == 3 and parts[1] in ["album", "track", "playlist"]:
+    if l == 3 and parts[1] in ["album", "track", "playlist", "artist"]:
         return {"type": parts[1], "id": parts[2]}
     if l == 5 and parts[3] == "playlist":
         return {"type": parts[3], "id": parts[4]}
+    if l >= 4 and parts[1] == "artist" and len(parts) >= 4:
+        if parts[3] == "discography":
+            discography_type = "all"
+            if len(parts) >= 5 and parts[4] in ["all", "album", "single", "compilation"]:
+                discography_type = parts[4]
+            return {"type": "artist_discography", "id": parts[2], "discography_type": discography_type}
+        else:
+            return {"type": "artist", "id": parts[2]}
 
     raise SpotifyInvalidUrlException("ERROR: unable to determine Spotify URL type or type is unsupported.")
 
@@ -339,6 +349,69 @@ def get_raw_spotify_data(spotify_url, batch: bool = False, delay: float = 1.0):
             raw_data = track_data
         except Exception as e:
             return {"error": f"Failed to get track data: {str(e)}"}
+            
+    elif url_info["type"] == "artist_discography":
+        try:
+            artist_data = get_json_from_api(
+                artist_base_url.format(url_info["id"]),
+                access_token
+            )
+            if not artist_data:
+                return {"error": "Failed to get artist data"}
+            
+            discography_type = url_info.get("discography_type", "all")
+            if discography_type == "all":
+                include_groups = "album,single,compilation"
+            else:
+                include_groups = discography_type
+            
+            albums = []
+            albums_url = f'{artist_albums_url.format(url_info["id"])}?include_groups={include_groups}&limit=50'
+            
+            if batch:
+                albums, num_batches = fetch_tracks_in_batches(albums_url, access_token, 50, delay)
+                raw_data = {
+                    "artist_info": artist_data,
+                    "albums": albums,
+                    "discography_type": discography_type,
+                    "_batch_count": num_batches,
+                    "_batch_enabled": True
+                }
+            else:
+                while albums_url:
+                    album_data = get_json_from_api(albums_url, access_token)
+                    if not album_data:
+                        break
+                        
+                    albums.extend(album_data['items'])
+                    albums_url = album_data.get('next')
+                    if albums_url and "&locale=" in albums_url:
+                        albums_url = albums_url.split("&locale=")[0]
+                
+                raw_data = {
+                    "artist_info": artist_data,
+                    "albums": albums,
+                    "discography_type": discography_type,
+                    "_batch_enabled": False
+                }
+                
+            raw_data['_token'] = access_token
+            
+        except Exception as e:
+            return {"error": f"Failed to get artist discography data: {str(e)}"}
+            
+    elif url_info["type"] == "artist":
+        try:
+            artist_data = get_json_from_api(
+                artist_base_url.format(url_info["id"]),
+                access_token
+            )
+            if not artist_data:
+                return {"error": "Failed to get artist data"}
+                
+            raw_data = artist_data
+        except Exception as e:
+            return {"error": f"Failed to get artist data: {str(e)}"}
 
     return raw_data
 
@@ -469,6 +542,134 @@ def format_playlist_data(playlist_data):
         "track_list": track_list
     }
 
+def format_artist_discography_data(discography_data):
+    artist_info = discography_data.get('artist_info', {})
+    albums = discography_data.get('albums', [])
+    access_token = discography_data.get('_token', '')
+    
+    artist_image = ''
+    if artist_info.get('images'):
+        artist_image = artist_info.get('images', [{}])[0].get('url', '')
+    
+    formatted_artist_info = {
+        "name": artist_info.get('name', ''),
+        "followers": artist_info.get('followers', {}).get('total', 0),
+        "genres": artist_info.get('genres', []),
+        "images": artist_image,
+        "external_urls": artist_info.get('external_urls', {}).get('spotify', ''),
+        "discography_type": discography_data.get('discography_type', 'all'),
+        "total_albums": len(albums)
+    }
+    
+    if discography_data.get('_batch_enabled', False):
+        formatted_artist_info["batch"] = f"{discography_data.get('_batch_count', 1)}"
+    
+    album_list = []
+    all_tracks = []
+    
+    for album in albums:
+        album_image = ''
+        if album.get('images'):
+            album_image = album.get('images', [{}])[0].get('url', '')
+        
+        album_artists = []
+        for artist in album.get('artists', []):
+            album_artists.append(artist['name'])
+        
+        album_info = {
+            "id": album.get('id', ''),
+            "name": album.get('name', ''),
+            "album_type": album.get('album_type', ''),
+            "release_date": album.get('release_date', ''),
+            "total_tracks": album.get('total_tracks', 0),
+            "artists": ", ".join(album_artists),
+            "images": album_image,
+            "external_urls": album.get('external_urls', {}).get('spotify', '')
+        }
+        
+        album_list.append(album_info)
+        
+        if access_token and album.get('id'):
+            try:
+                album_tracks_data = get_json_from_api(
+                    f'{album_base_url.format(album.get("id"))}/tracks?limit=50',
+                    access_token
+                )
+                
+                if album_tracks_data:
+                    tracks = []
+                    tracks_url = f'{album_base_url.format(album.get("id"))}/tracks?limit=50'
+                    
+                    while tracks_url:
+                        track_data = get_json_from_api(tracks_url, access_token)
+                        if not track_data:
+                            break
+                            
+                        tracks.extend(track_data['items'])
+                        tracks_url = track_data.get('next')
+                        if tracks_url and "&locale=" in tracks_url:
+                            tracks_url = tracks_url.split("&locale=")[0]
+                    
+                    for track in tracks:
+                        track_artists = []
+                        for artist in track.get('artists', []):
+                            track_artists.append(artist['name'])
+                        
+                        track_id = track.get('id', '')
+                        track_isrc = ''
+                        
+                        if track_id:
+                            try:
+                                full_track_data = get_json_from_api(
+                                    track_base_url.format(track_id),
+                                    access_token
+                                )
+                                if full_track_data:
+                                    track_isrc = full_track_data.get('external_ids', {}).get('isrc', '')
+                            except:
+                                pass
+                        
+                        formatted_track = {
+                            "artists": ", ".join(track_artists),
+                            "name": track.get('name', ''),
+                            "album_name": album.get('name', ''),
+                            "album_type": album.get('album_type', ''),
+                            "duration_ms": track.get('duration_ms', 0),
+                            "images": album_image,
+                            "release_date": album.get('release_date', ''),
+                            "track_number": track.get('track_number', 0),
+                            "external_urls": track.get('external_urls', {}).get('spotify', ''),
+                            "isrc": track_isrc
+                        }
+                        
+                        all_tracks.append(formatted_track)
+                        
+            except Exception as e:
+                print(f"Error getting tracks for album {album.get('name', '')}: {str(e)}")
+                continue
+    
+    return {
+        "artist_info": formatted_artist_info,
+        "album_list": album_list,
+        "track_list": all_tracks
+    }
+
+def format_artist_data(artist_data):
+    artist_image = ''
+    if artist_data.get('images'):
+        artist_image = artist_data.get('images', [{}])[0].get('url', '')
+    
+    return {
+        "artist": {
+            "name": artist_data.get('name', ''),
+            "followers": artist_data.get('followers', {}).get('total', 0),
+            "genres": artist_data.get('genres', []),
+            "images": artist_image,
+            "external_urls": artist_data.get('external_urls', {}).get('spotify', ''),
+            "popularity": artist_data.get('popularity', 0)
+        }
+    }
+
 def process_spotify_data(raw_data, data_type):
     if not raw_data or "error" in raw_data:
         return {"error": "Invalid data provided"}
@@ -480,6 +681,10 @@ def process_spotify_data(raw_data, data_type):
             return format_album_data(raw_data)
         elif data_type == "playlist":
             return format_playlist_data(raw_data)
+        elif data_type == "artist_discography":
+            return format_artist_discography_data(raw_data)
+        elif data_type == "artist":
+            return format_artist_data(raw_data)
         else:
             return {"error": "Invalid data type"}
     except Exception as e:
@@ -498,11 +703,23 @@ if __name__ == '__main__':
     album = "https://open.spotify.com/album/6J84szYCnMfzEcvIcfWMFL"
     song = "https://open.spotify.com/track/7so0lgd0zP2Sbgs2d7a1SZ"
     
+    artist_discography_all = "https://open.spotify.com/artist/0du5cEVh5yTK9QJze8zA0C/discography/all"
+    artist_discography_albums = "https://open.spotify.com/artist/0du5cEVh5yTK9QJze8zA0C/discography/album"
+    artist_discography_singles = "https://open.spotify.com/artist/0du5cEVh5yTK9QJze8zA0C/discography/single"
+    artist_discography_compilations = "https://open.spotify.com/artist/0du5cEVh5yTK9QJze8zA0C/discography/compilation"
+    
+    print("=== Testing Artist Discography (All) ===")
+    filtered_discography = get_filtered_data(artist_discography_all, batch=True, delay=0.1)
+    print(json.dumps(filtered_discography, indent=2))
+    
+    print("\n=== Testing Playlist ===")
     filtered_playlist = get_filtered_data(playlist, batch=True, delay=0.1)
     print(json.dumps(filtered_playlist, indent=2))
     
+    print("\n=== Testing Album ===")
     filtered_album = get_filtered_data(album)
     print(json.dumps(filtered_album, indent=2))
     
+    print("\n=== Testing Track ===")
     filtered_track = get_filtered_data(song)
     print(json.dumps(filtered_track, indent=2))
