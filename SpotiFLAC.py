@@ -2005,11 +2005,9 @@ class SpotiFLACGUI(QWidget):
         self.pause_resume_btn.setText('Pause')
         self.stop_timer()
         
-        # Store successful downloads for later removal
         if successful_tracks is not None:
             self.successful_downloads = successful_tracks
         
-        # Show remove successful button if there are successful downloads
         if hasattr(self, 'successful_downloads') and self.successful_downloads:
             self.remove_successful_btn.show()
         else:
@@ -2048,11 +2046,9 @@ class SpotiFLACGUI(QWidget):
     def remove_successful_downloads(self):
         """Remove successfully downloaded tracks from the dashboard"""
         if not hasattr(self, 'successful_downloads') or not self.successful_downloads:
-            # Show message on process tab since user is still there
             self.log_output.append("No successful downloads to remove.")
             return
         
-        # Find successful tracks in the track list
         tracks_to_remove = []
         for track in self.tracks:
             for successful_track in self.successful_downloads:
@@ -2063,7 +2059,6 @@ class SpotiFLACGUI(QWidget):
                     break
         
         if tracks_to_remove:
-            # Remove tracks from both lists
             for track in tracks_to_remove:
                 if track in self.tracks:
                     self.tracks.remove(track)
@@ -2072,12 +2067,10 @@ class SpotiFLACGUI(QWidget):
             
             self.update_track_list_display()
             self.log_output.append(f"Removed {len(tracks_to_remove)} successfully downloaded tracks from the list.")
-            # Switch to dashboard after showing the message
             self.tab_widget.setCurrentIndex(0)
         else:
             self.log_output.append("No matching tracks found in the current list.")
         
-        # Hide the button after use
         self.remove_successful_btn.hide()
 
     def remove_selected_tracks(self):
