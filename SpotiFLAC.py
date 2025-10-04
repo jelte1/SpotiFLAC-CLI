@@ -59,7 +59,7 @@ class MetadataFetchWorker(QThread):
             self.error.emit(f'Failed to fetch metadata: {str(e)}')
 
 class DownloadWorker(QThread):
-    finished = pyqtSignal(bool, str, list)
+    finished = pyqtSignal(bool, str, list, list, list)
     progress = pyqtSignal(str, int)
     
     def __init__(self, tracks, outpath, is_single_track=False, is_album=False, is_playlist=False,
@@ -82,6 +82,8 @@ class DownloadWorker(QThread):
         self.is_paused = False
         self.is_stopped = False
         self.failed_tracks = []
+        self.successful_tracks = []
+        self.skipped_tracks = []
 
     def get_formatted_filename(self, track):
         if self.filename_format == "artist_title":
@@ -156,6 +158,7 @@ class DownloadWorker(QThread):
                         self.progress.emit(f"File already exists: {new_filename}. Skipping download.", 0)
                         self.progress.emit(f"Skipped: {track.title} - {track.artists}", 
                                     int((i + 1) / total_tracks * 100))
+                        self.skipped_tracks.append(track)
                         continue
                     
                     if self.service == "qobuz":
@@ -204,6 +207,7 @@ class DownloadWorker(QThread):
                         elif isinstance(download_result_details, dict) and (download_result_details.get("status") == "all_skipped" or download_result_details.get("status") == "skipped_exists"):
                             self.progress.emit(f"File already exists or skipped: {new_filename}",0)
                             downloaded_file = new_filepath
+                            self.skipped_tracks.append(track)
                         else: 
                             downloaded_file = None 
                             raise Exception(f"Tidal download failed or returned unexpected result: {download_result_details}")
@@ -280,6 +284,7 @@ class DownloadWorker(QThread):
                             self.progress.emit(f"File already exists: {new_filename}", 0)
                             self.progress.emit(f"Skipped: {track.title} - {track.artists}", 
                                         int((i + 1) / total_tracks * 100))
+                            self.skipped_tracks.append(track)
                             continue
                         
                         if downloaded_file != new_filepath:
@@ -294,6 +299,7 @@ class DownloadWorker(QThread):
                     
                     self.progress.emit(f"Successfully downloaded: {track.title} - {track.artists}", 
                                     int((i + 1) / total_tracks * 100))
+                    self.successful_tracks.append(track)
                 except Exception as e:
                     self.failed_tracks.append((track.title, track.artists, str(e)))
                     self.progress.emit(f"Failed to download: {track.title} - {track.artists}\nError: {str(e)}", 
@@ -304,10 +310,14 @@ class DownloadWorker(QThread):
                 success_message = "Download completed!"
                 if self.failed_tracks:
                     success_message += f"\n\nFailed downloads: {len(self.failed_tracks)} tracks"
-                self.finished.emit(True, success_message, self.failed_tracks)
+                if self.successful_tracks:
+                    success_message += f"\n\nSuccessful downloads: {len(self.successful_tracks)} tracks"
+                if self.skipped_tracks:
+                    success_message += f"\n\nSkipped (already exists): {len(self.skipped_tracks)} tracks"
+                self.finished.emit(True, success_message, self.failed_tracks, self.successful_tracks, self.skipped_tracks)
                 
         except Exception as e:
-            self.finished.emit(False, str(e), self.failed_tracks)
+            self.finished.emit(False, str(e), self.failed_tracks, self.successful_tracks, self.skipped_tracks)
 
     def pause(self):
         self.is_paused = True
@@ -643,6 +653,7 @@ class SpotiFLACGUI(QWidget):
         self.current_version = "4.6"
         self.tracks = []
         self.all_tracks = []  
+        self.successful_downloads = []
         self.reset_state()
         
         self.settings = QSettings('SpotiFLAC', 'Settings')
@@ -1016,19 +1027,24 @@ class SpotiFLACGUI(QWidget):
         control_layout = QHBoxLayout()
         self.stop_btn = QPushButton('Stop')
         self.pause_resume_btn = QPushButton('Pause')
+        self.remove_successful_btn = QPushButton('Remove Finished Songs')
         
         self.stop_btn.setFixedWidth(120)
         self.pause_resume_btn.setFixedWidth(120)
+        self.remove_successful_btn.setFixedWidth(200)
         
         self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.pause_resume_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.remove_successful_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         
         self.stop_btn.clicked.connect(self.stop_download)
         self.pause_resume_btn.clicked.connect(self.toggle_pause_resume)
+        self.remove_successful_btn.clicked.connect(self.remove_successful_downloads)
         
         control_layout.addStretch()
         control_layout.addWidget(self.stop_btn)
         control_layout.addWidget(self.pause_resume_btn)
+        control_layout.addWidget(self.remove_successful_btn)
         control_layout.addStretch()
         
         process_layout.addLayout(control_layout)
@@ -1041,6 +1057,7 @@ class SpotiFLACGUI(QWidget):
         self.time_label.hide()
         self.stop_btn.hide()
         self.pause_resume_btn.hide()
+        self.remove_successful_btn.hide()
 
     def setup_settings_tab(self):
         settings_tab = QWidget()
@@ -1953,7 +1970,7 @@ class SpotiFLACGUI(QWidget):
             qobuz_region,
             qobuz_mode
         )
-        self.worker.finished.connect(self.on_download_finished)
+        self.worker.finished.connect(lambda success, message, failed_tracks, successful_tracks, skipped_tracks: self.on_download_finished(success, message, failed_tracks, successful_tracks, skipped_tracks))
         self.worker.progress.connect(self.update_progress)
         self.worker.start()
         self.start_timer()
@@ -1985,14 +2002,24 @@ class SpotiFLACGUI(QWidget):
         if hasattr(self, 'worker'):
             self.worker.stop()
         self.stop_timer()
-        self.on_download_finished(True, "Download stopped by user.", [])
+        self.on_download_finished(True, "Download stopped by user.", [], [], [])
         
-    def on_download_finished(self, success, message, failed_tracks):
+    def on_download_finished(self, success, message, failed_tracks, successful_tracks=None, skipped_tracks=None):
         self.progress_bar.hide()
         self.stop_btn.hide()
         self.pause_resume_btn.hide()
         self.pause_resume_btn.setText('Pause')
         self.stop_timer()
+        
+        if successful_tracks is not None:
+            self.successful_downloads = successful_tracks
+        if skipped_tracks is not None:
+            self.skipped_downloads = skipped_tracks
+        
+        if (hasattr(self, 'successful_downloads') and self.successful_downloads) or (hasattr(self, 'skipped_downloads') and self.skipped_downloads):
+            self.remove_successful_btn.show()
+        else:
+            self.remove_successful_btn.hide()
         
         self.download_selected_btn.setEnabled(True)
         self.download_all_btn.setEnabled(True)
@@ -2023,6 +2050,62 @@ class SpotiFLACGUI(QWidget):
             else:
                 self.worker.pause()
                 self.pause_resume_btn.setText('Resume')
+
+    def remove_successful_downloads(self):
+        """Remove successfully downloaded and skipped tracks from the dashboard"""
+        successful_tracks = getattr(self, 'successful_downloads', [])
+        skipped_tracks = getattr(self, 'skipped_downloads', [])
+        
+        if not successful_tracks and not skipped_tracks:
+            self.log_output.append("No downloaded or skipped tracks to remove.")
+            return
+        
+        tracks_to_remove = []
+        
+        # Check for successful downloads
+        for track in self.tracks:
+            for successful_track in successful_tracks:
+                if (track.title == successful_track.title and 
+                    track.artists == successful_track.artists and
+                    track.album == successful_track.album):
+                    tracks_to_remove.append(track)
+                    break
+        
+        # Check for skipped tracks (already exists)
+        for track in self.tracks:
+            for skipped_track in skipped_tracks:
+                if (track.title == skipped_track.title and 
+                    track.artists == skipped_track.artists and
+                    track.album == skipped_track.album):
+                    if track not in tracks_to_remove:  # Avoid duplicates
+                        tracks_to_remove.append(track)
+                    break
+        
+        if tracks_to_remove:
+            for track in tracks_to_remove:
+                if track in self.tracks:
+                    self.tracks.remove(track)
+                if track in self.all_tracks:
+                    self.all_tracks.remove(track)
+            
+            self.update_track_list_display()
+            successful_count = len([t for t in tracks_to_remove if t in successful_tracks])
+            skipped_count = len([t for t in tracks_to_remove if t in skipped_tracks])
+            
+            message = f"Removed {len(tracks_to_remove)} tracks from the list"
+            if successful_count > 0:
+                message += f" ({successful_count} downloaded"
+            if skipped_count > 0:
+                message += f", {skipped_count} already existed" if successful_count > 0 else f" ({skipped_count} already existed"
+            if successful_count > 0 or skipped_count > 0:
+                message += ")"
+            
+            self.log_output.append(message + ".")
+            self.tab_widget.setCurrentIndex(0)
+        else:
+            self.log_output.append("No matching tracks found in the current list.")
+        
+        self.remove_successful_btn.hide()
 
     def remove_selected_tracks(self):
         if not self.is_single_track:
