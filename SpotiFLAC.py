@@ -13,15 +13,17 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
     QLabel, QFileDialog, QListWidget, QTextEdit, QTabWidget, QButtonGroup, QRadioButton,
     QAbstractItemView, QProgressBar, QCheckBox, QDialog,
-    QDialogButtonBox, QComboBox, QStyledItemDelegate
+    QDialogButtonBox, QComboBox, QStyledItemDelegate, QMessageBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl, QTimer, QTime, QSettings, QSize
-from PyQt6.QtGui import QIcon, QTextCursor, QDesktopServices, QPixmap, QBrush
+from PyQt6.QtGui import QIcon, QTextCursor, QDesktopServices, QPixmap, QBrush, QPainter, QColor
+from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 from getMetadata import get_filtered_data, parse_uri, SpotifyInvalidUrlException
 from tidalDL import TidalDownloader
 from deezerDL import DeezerDownloader
+from getSecret import scrape_and_save
 
 @dataclass
 class Track:
@@ -34,6 +36,25 @@ class Track:
     id: str
     isrc: str = ""
     release_date: str = ""
+
+class SecretScrapeWorker(QThread):
+    finished = pyqtSignal(bool, str)
+    progress = pyqtSignal(str)
+    
+    def run(self):
+        try:
+            self.progress.emit("Fixing error...")
+            self.progress.emit("Please wait, this may take a moment...")
+            
+            success, message = scrape_and_save(progress_callback=self.progress.emit)
+            
+            if success:
+                self.finished.emit(True, "Fixed successfully!")
+            else:
+                self.finished.emit(False, message)
+                
+        except Exception as e:
+            self.finished.emit(False, f"Error: {str(e)}")
 
 class MetadataFetchWorker(QThread):
     finished = pyqtSignal(dict)
@@ -392,8 +413,8 @@ class ServiceComboBox(QComboBox):
         current_dir = os.path.dirname(os.path.abspath(__file__))
         
         self.services = [
-            {'id': 'tidal', 'name': 'Tidal', 'icon': 'tidal.png', 'online': False},
-            {'id': 'deezer', 'name': 'Deezer', 'icon': 'deezer.png', 'online': False}
+            {'id': 'tidal', 'name': 'Tidal', 'icon': 'icons/tidal.png', 'online': False},
+            {'id': 'deezer', 'name': 'Deezer', 'icon': 'icons/deezer.png', 'online': False}
         ]
         
         for service in self.services:
@@ -455,7 +476,7 @@ class ServiceComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "4.8"
+        self.current_version = "4.9"
         self.tracks = []
         self.all_tracks = []  
         self.successful_downloads = []
@@ -530,6 +551,7 @@ class SpotiFLACGUI(QWidget):
 
     def reset_ui(self):
         self.track_list.clear()
+        self.track_list.show()
         self.log_output.clear()
         self.progress_bar.setValue(0)
         self.progress_bar.hide()
@@ -542,13 +564,33 @@ class SpotiFLACGUI(QWidget):
             self.search_input.clear()
         if hasattr(self, 'search_widget'):
             self.search_widget.hide()
+    
+    def get_themed_icon(self, icon_name):
+        icon_path = os.path.join(os.path.dirname(__file__), "icons", icon_name)
+        if not os.path.exists(icon_path):
+            return QIcon()
+        
+        with open(icon_path, 'r') as f:
+            svg_content = f.read()
+        
+        svg_content = svg_content.replace('currentColor', self.current_theme_color)
+        
+        renderer = QSvgRenderer(svg_content.encode())
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(QColor(0, 0, 0, 0))
+        
+        painter = QPainter(pixmap)
+        renderer.render(painter)
+        painter.end()
+        
+        return QIcon(pixmap)
 
     def initUI(self):
         self.setWindowTitle('SpotiFLAC')
         self.setFixedWidth(650)
         self.setMinimumHeight(350)  
         
-        icon_path = os.path.join(os.path.dirname(__file__), "icon.svg")
+        icon_path = os.path.join(os.path.dirname(__file__), "icons", "icon.svg")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
             
@@ -766,42 +808,42 @@ class SpotiFLACGUI(QWidget):
 
     def setup_track_buttons(self):
         self.btn_layout = QHBoxLayout()
-        self.download_selected_btn = QPushButton('Download Selected')
-        self.download_all_btn = QPushButton('Download All')
-        self.remove_btn = QPushButton('Remove Selected')
-        self.clear_btn = QPushButton('Clear')
+        self.download_btn = QPushButton(' Download')
+        self.download_btn.setIcon(self.get_themed_icon('download.svg'))
+        self.delete_btn = QPushButton(' Delete')
+        self.delete_btn.setIcon(self.get_themed_icon('trash.svg'))
         
-        for btn in [self.download_selected_btn, self.download_all_btn, self.remove_btn, self.clear_btn]:
-            btn.setMinimumWidth(120)
+        for btn in [self.download_btn, self.delete_btn]:
+            btn.setFixedWidth(120)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             
-        self.download_selected_btn.clicked.connect(self.download_selected)
-        self.download_all_btn.clicked.connect(self.download_all)
-        self.remove_btn.clicked.connect(self.remove_selected_tracks)
-        self.clear_btn.clicked.connect(self.clear_tracks)
+        self.download_btn.clicked.connect(self.download_tracks_action)
+        self.delete_btn.clicked.connect(self.delete_tracks)
         
         self.btn_layout.addStretch()
-        for btn in [self.download_selected_btn, self.download_all_btn, self.remove_btn, self.clear_btn]:
-            self.btn_layout.addWidget(btn, 1)
+        self.btn_layout.addWidget(self.download_btn)
+        self.btn_layout.addWidget(self.delete_btn)
         self.btn_layout.addStretch()
         
         self.single_track_container = QWidget()
         single_track_layout = QHBoxLayout(self.single_track_container)
         single_track_layout.setContentsMargins(0, 0, 0, 0)
         
-        self.single_download_btn = QPushButton('Download')
-        self.single_clear_btn = QPushButton('Clear')
+        self.single_download_btn = QPushButton(' Download')
+        self.single_download_btn.setIcon(self.get_themed_icon('download.svg'))
+        self.single_delete_btn = QPushButton(' Delete')
+        self.single_delete_btn.setIcon(self.get_themed_icon('trash.svg'))
         
-        for btn in [self.single_download_btn, self.single_clear_btn]:
+        for btn in [self.single_download_btn, self.single_delete_btn]:
             btn.setFixedWidth(120)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             
-        self.single_download_btn.clicked.connect(self.download_all)
-        self.single_clear_btn.clicked.connect(self.clear_tracks)
+        self.single_download_btn.clicked.connect(self.download_tracks_action)
+        self.single_delete_btn.clicked.connect(self.delete_tracks)
         
         single_track_layout.addStretch()
         single_track_layout.addWidget(self.single_download_btn)
-        single_track_layout.addWidget(self.single_clear_btn)
+        single_track_layout.addWidget(self.single_delete_btn)
         single_track_layout.addStretch()
         
         self.single_track_container.hide()
@@ -814,6 +856,18 @@ class SpotiFLACGUI(QWidget):
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
         process_layout.addWidget(self.log_output)
+        
+        fix_error_layout = QHBoxLayout()
+        fix_error_layout.addStretch()
+        self.fix_error_btn = QPushButton(' Fix Error')
+        self.fix_error_btn.setIcon(self.get_themed_icon('tool.svg'))
+        self.fix_error_btn.setFixedWidth(120)
+        self.fix_error_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.fix_error_btn.clicked.connect(self.fix_error_action)
+        self.fix_error_btn.hide()
+        fix_error_layout.addWidget(self.fix_error_btn)
+        fix_error_layout.addStretch()
+        process_layout.addLayout(fix_error_layout)
         
         progress_time_layout = QVBoxLayout()
         progress_time_layout.setSpacing(2)
@@ -840,7 +894,8 @@ class SpotiFLACGUI(QWidget):
         self.stop_btn.clicked.connect(self.stop_download)
         self.pause_resume_btn.clicked.connect(self.toggle_pause_resume)
         
-        self.remove_successful_btn = QPushButton('Remove Finished Songs')
+        self.remove_successful_btn = QPushButton(' Remove Finished Tracks')
+        self.remove_successful_btn.setIcon(self.get_themed_icon('circle-x.svg'))
         self.remove_successful_btn.setFixedWidth(200)
         self.remove_successful_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.remove_successful_btn.clicked.connect(self.remove_successful_downloads)
@@ -1214,6 +1269,25 @@ class SpotiFLACGUI(QWidget):
             }
         )
         
+        self.refresh_button_icons()
+    
+    def refresh_button_icons(self):
+        if hasattr(self, 'download_btn'):
+            self.download_btn.setIcon(self.get_themed_icon('download.svg'))
+        if hasattr(self, 'delete_btn'):
+            self.delete_btn.setIcon(self.get_themed_icon('trash.svg'))
+        
+        if hasattr(self, 'single_download_btn'):
+            self.single_download_btn.setIcon(self.get_themed_icon('download.svg'))
+        if hasattr(self, 'single_delete_btn'):
+            self.single_delete_btn.setIcon(self.get_themed_icon('trash.svg'))
+        
+        if hasattr(self, 'fix_error_btn'):
+            self.fix_error_btn.setIcon(self.get_themed_icon('tool.svg'))
+        
+        if hasattr(self, 'remove_successful_btn'):
+            self.remove_successful_btn.setIcon(self.get_themed_icon('circle-x.svg'))
+        
     def setup_about_tab(self):
         about_tab = QWidget()
         about_layout = QVBoxLayout()
@@ -1319,6 +1393,9 @@ class SpotiFLACGUI(QWidget):
             return
 
         try:
+            if hasattr(self, 'fix_error_btn') and self.fix_error_btn.isVisible():
+                self.fix_error_btn.hide()
+            
             self.reset_state()
             self.reset_ui()
             
@@ -1355,6 +1432,39 @@ class SpotiFLACGUI(QWidget):
     
     def on_metadata_error(self, error_message):
         self.log_output.append(f'Error: {error_message}')
+        
+        if "Failed to get raw data" in error_message or "Failed to fetch secrets" in error_message or "Failed to get access token" in error_message:
+            if not hasattr(self, 'fix_error_btn') or not self.fix_error_btn.isVisible():
+                self.show_fix_error_button()
+    
+    def show_fix_error_button(self):
+        if hasattr(self, 'fix_error_btn'):
+            self.fix_error_btn.show()
+    
+    def fix_error_action(self):
+        self.fix_error_btn.setEnabled(False)
+        self.fix_error_btn.setText("Fixing...")
+        
+        self.scrape_worker = SecretScrapeWorker()
+        self.scrape_worker.progress.connect(lambda msg: self.log_output.append(msg))
+        self.scrape_worker.finished.connect(self.on_scrape_finished)
+        self.scrape_worker.start()
+    
+    def on_scrape_finished(self, success, message):
+        self.log_output.append(message)
+        
+        if hasattr(self, 'fix_error_btn'):
+            self.fix_error_btn.setEnabled(True)
+            self.fix_error_btn.setText("Fix Error")
+            
+            if success:
+                self.fix_error_btn.hide()
+        
+        if success:
+            url = self.spotify_url.text().strip()
+            if url:
+                self.log_output.append("Retrying fetch...")
+                QTimer.singleShot(1000, self.fetch_tracks)
 
     def handle_track_metadata(self, track_data):
         track_id = track_data["external_urls"].split("/")[-1]
@@ -1604,37 +1714,27 @@ class SpotiFLACGUI(QWidget):
 
     def update_button_states(self):
         if self.is_single_track:
-            for btn in [self.download_selected_btn, self.download_all_btn, self.remove_btn, self.clear_btn]:
+            for btn in [self.download_btn, self.delete_btn]:
                 btn.hide()
             
             self.single_track_container.show()
             
             self.single_download_btn.setEnabled(True)
-            self.single_clear_btn.setEnabled(True)
+            self.single_delete_btn.setEnabled(True)
             
         else:
             self.single_track_container.hide()
             
-            self.download_selected_btn.show()
-            self.download_all_btn.show()
-            self.remove_btn.show()
-            self.clear_btn.show()
+            self.download_btn.show()
+            self.delete_btn.show()
             
-            self.download_all_btn.setText('Download All')
-            self.clear_btn.setText('Clear')
-            
-            self.download_all_btn.setMinimumWidth(120)
-            self.clear_btn.setMinimumWidth(120)
-            
-            self.download_selected_btn.setEnabled(True)
-            self.download_all_btn.setEnabled(True)
+            self.download_btn.setEnabled(True)
+            self.delete_btn.setEnabled(True)
 
     def hide_track_buttons(self):
         buttons = [
-            self.download_selected_btn,
-            self.download_all_btn,
-            self.remove_btn,
-            self.clear_btn
+            self.download_btn,
+            self.delete_btn
         ]
         for btn in buttons:
             btn.hide()
@@ -1642,24 +1742,28 @@ class SpotiFLACGUI(QWidget):
         if hasattr(self, 'single_track_container'):
             self.single_track_container.hide()
 
-    def download_selected(self):
+    def download_tracks_action(self):
         if self.is_single_track:
-            self.download_all()
+            self.start_download([0])
         else:
-            selected_items = self.track_list.selectedItems()            
+            selected_items = self.track_list.selectedItems()
+            
             if not selected_items:
-                self.log_output.append('Warning: Please select tracks to download.')
-                return
-            selected_indices = [self.track_list.row(item) for item in selected_items]
-            self.download_tracks(selected_indices)
-
-    def download_all(self):
-        if self.is_single_track:
-            self.download_tracks([0])
-        else:
-            self.download_tracks(range(len(self.tracks)))
-
-    def download_tracks(self, indices):
+                reply = QMessageBox.question(
+                    self,
+                    'Confirm Download All',
+                    f'No tracks selected. Download all {len(self.tracks)} tracks?',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.start_download(range(len(self.tracks)))
+            else:
+                selected_indices = [self.track_list.row(item) for item in selected_items]
+                self.start_download(selected_indices)
+    
+    def start_download(self, indices):
         self.log_output.clear()
         raw_outpath = self.output_dir.text().strip()
         outpath = os.path.normpath(raw_outpath)
@@ -1703,13 +1807,12 @@ class SpotiFLACGUI(QWidget):
         self.update_ui_for_download_start()
 
     def update_ui_for_download_start(self):
-        self.download_selected_btn.setEnabled(False)
-        self.download_all_btn.setEnabled(False)
+        self.download_btn.setEnabled(False)
         
         if hasattr(self, 'single_download_btn'):
             self.single_download_btn.setEnabled(False)
-        if hasattr(self, 'single_clear_btn'):
-            self.single_clear_btn.setEnabled(False)
+        if hasattr(self, 'single_delete_btn'):
+            self.single_delete_btn.setEnabled(False)
             
         self.stop_btn.show()
         self.pause_resume_btn.show()
@@ -1747,13 +1850,12 @@ class SpotiFLACGUI(QWidget):
         else:
             self.remove_successful_btn.hide()
         
-        self.download_selected_btn.setEnabled(True)
-        self.download_all_btn.setEnabled(True)
+        self.download_btn.setEnabled(True)
         
         if hasattr(self, 'single_download_btn'):
             self.single_download_btn.setEnabled(True)
-        if hasattr(self, 'single_clear_btn'):
-            self.single_clear_btn.setEnabled(True)
+        if hasattr(self, 'single_delete_btn'):
+            self.single_delete_btn.setEnabled(True)
         
         if success:
             self.log_output.append(f"\nStatus: {message}")
@@ -1830,26 +1932,36 @@ class SpotiFLACGUI(QWidget):
         
         self.remove_successful_btn.hide()
 
-    def remove_selected_tracks(self):
-        if not self.is_single_track:
+    def delete_tracks(self):
+        if self.is_single_track:
+            self.reset_state()
+            self.reset_ui()
+        else:
             selected_items = self.track_list.selectedItems()
-            selected_indices = [self.track_list.row(item) for item in selected_items]
             
-            tracks_to_remove = [self.tracks[i] for i in selected_indices]
-            
-            for track in tracks_to_remove:
-                if track in self.tracks:
-                    self.tracks.remove(track)
-                if track in self.all_tracks:
-                    self.all_tracks.remove(track)
-            
-
-            
-            self.update_track_list_display()
-
-    def clear_tracks(self):
-        self.reset_state()
-        self.reset_ui()
+            if not selected_items:
+                reply = QMessageBox.question(
+                    self,
+                    'Confirm Delete All',
+                    f'No tracks selected. Delete all {len(self.tracks)} tracks?',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.reset_state()
+                    self.reset_ui()
+            else:
+                selected_indices = [self.track_list.row(item) for item in selected_items]
+                tracks_to_remove = [self.tracks[i] for i in selected_indices]
+                
+                for track in tracks_to_remove:
+                    if track in self.tracks:
+                        self.tracks.remove(track)
+                    if track in self.all_tracks:
+                        self.all_tracks.remove(track)
+                
+                self.update_track_list_display()
         self.tab_widget.setCurrentIndex(0)
 
     def start_timer(self):

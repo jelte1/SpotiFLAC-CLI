@@ -6,3 +6,4 @@ mutagen
 pyotp
 packaging
 pyinstaller
+DrissionPage
