@@ -455,7 +455,7 @@ class ServiceComboBox(QComboBox):
 class SpotiFLACGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.current_version = "4.7"
+        self.current_version = "4.8"
         self.tracks = []
         self.all_tracks = []  
         self.successful_downloads = []
