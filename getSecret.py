@@ -31,15 +31,7 @@ def summarise(caps):
     
     return True, f"Saved to: {output_file}"
 
-
 def grab_live(progress_callback=None):
-    """
-    Grab secrets from Spotify web player
-    Args:
-        progress_callback: Optional callback function to report progress
-    Returns:
-        list: Captured secrets
-    """
     def emit_progress(msg):
         if progress_callback:
             progress_callback(msg)
@@ -87,19 +79,11 @@ def grab_live(progress_callback=None):
         page.quit()
 
 def scrape_and_save(progress_callback=None):
-    """
-    Main function to scrape secrets and save to file
-    Args:
-        progress_callback: Optional callback function to report progress
-    Returns:
-        tuple: (success: bool, message: str)
-    """
     try:
         caps = grab_live(progress_callback)
         return summarise(caps)
     except Exception as e:
         return False, f"Error: {str(e)}"
-
 
 def main():
     success, message = scrape_and_save()
