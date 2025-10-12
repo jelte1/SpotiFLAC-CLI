@@ -9,6 +9,9 @@ import asyncio
 from packaging import version
 import qdarktheme
 
+# Import for reading metadata from FLAC files
+from mutagen.flac import FLAC
+
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit,
     QLabel, QFileDialog, QListWidget, QTextEdit, QTabWidget, QButtonGroup, QRadioButton,
@@ -101,6 +104,17 @@ class DownloadWorker(QThread):
         self.successful_tracks = []
         self.skipped_tracks = []
 
+    def get_flac_isrc(self, filepath):
+        """Reads the ISRC tag from a FLAC file."""
+        try:
+            audio = FLAC(filepath)
+            if 'isrc' in audio:
+                return audio['isrc'][0]
+        except Exception:
+            # Ignores errors like file not found, not a FLAC file, etc.
+            pass
+        return None
+
     def get_formatted_filename(self, track):
         if self.filename_format == "artist_title":
             filename = f"{track.artists} - {track.title}.flac"
@@ -155,6 +169,30 @@ class DownloadWorker(QThread):
                     else:
                         track_outpath = self.outpath
                     
+                    # Logic for ISRC check
+                    spotify_isrc = track.isrc
+                    if spotify_isrc:
+                        is_already_downloaded = False
+                        try:
+                            # Check all .flac files in the target folder for a matching ISRC
+                            for filename in os.listdir(track_outpath):
+                                if filename.lower().endswith('.flac'):
+                                    filepath = os.path.join(track_outpath, filename)
+                                    local_isrc = self.get_flac_isrc(filepath)
+                                    if local_isrc and local_isrc == spotify_isrc:
+                                        self.progress.emit(f"Skipped: Track with matching ISRC '{spotify_isrc}' already exists ('{filename}').", 0)
+                                        self.progress.emit(f"Skipped: {track.title} - {track.artists}",
+                                                        int((i + 1) / total_tracks * 100))
+                                        self.skipped_tracks.append(track)
+                                        is_already_downloaded = True
+                                        break  # Match found, no need to check other files
+                        except FileNotFoundError:
+                            # This means the target directory doesn't exist yet, so we can proceed.
+                            pass
+                        
+                        if is_already_downloaded:
+                            continue  # Move to the next track in the main loop
+                    
                     if (self.is_album or self.is_playlist) and self.use_track_numbers:
                         new_filename = f"{track.track_number:02d} - {self.get_formatted_filename(track)}"
                     else:
@@ -163,8 +201,9 @@ class DownloadWorker(QThread):
                     new_filename = re.sub(r'[<>:"/\\|?*]', lambda m: "'" if m.group() == '"' else '_', new_filename)
                     new_filepath = os.path.join(track_outpath, new_filename)
                     
+                    # Fallback check by filename
                     if os.path.exists(new_filepath) and os.path.getsize(new_filepath) > 0:
-                        self.progress.emit(f"File already exists: {new_filename}. Skipping download.", 0)
+                        self.progress.emit(f"File already exists by name: {new_filename}. Skipping download.", 0)
                         self.progress.emit(f"Skipped: {track.title} - {track.artists}", 
                                     int((i + 1) / total_tracks * 100))
                         self.skipped_tracks.append(track)
