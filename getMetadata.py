@@ -15,13 +15,23 @@ def get_random_user_agent():
 
 
 def generate_totp():
-    url = "https://raw.githubusercontent.com/Thereallo1026/spotify-secrets/refs/heads/main/secrets/secretBytes.json"
+    url = "https://raw.githubusercontent.com/afkarxyz/secretBytes/refs/heads/main/secrets/secretBytes.json"
 
     try:
         resp = requests.get(url, timeout=10)
         if resp.status_code != 200:
             raise Exception(f"Failed to fetch TOTP secrets from GitHub. Status: {resp.status_code}")
         secrets_list = resp.json()
+        # secrets_list = [
+        #     {"version": 59,
+        #      "secret": [123, 105, 79, 70, 110, 59, 52, 125, 60, 49, 80, 70, 89, 75, 80, 86, 63, 53, 123, 37, 117, 49,
+        #                 52, 93, 77, 62, 47, 86, 48, 104, 68, 72]},
+        #     {"version": 60,
+        #      "secret": [79, 109, 69, 123, 90, 65, 46, 74, 94, 34, 58, 48, 70, 71, 92, 85, 122, 63, 91, 64, 87, 87]},
+        #     {"version": 61,
+        #      "secret": [44, 55, 47, 42, 70, 40, 34, 114, 76, 74, 50, 111, 120, 97, 75, 76, 94, 102, 43, 69, 49, 120,
+        #                 118, 80, 64, 78]},
+        # ]
 
         latest_entry = max(secrets_list, key=lambda x: x["version"])
         version = latest_entry["version"]
@@ -61,7 +71,7 @@ playlist_base_url = 'https://api.spotify.com/v1/playlists/{}'
 album_base_url = 'https://api.spotify.com/v1/albums/{}'
 track_base_url = 'https://api.spotify.com/v1/tracks/{}'
 headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'User-Agent': get_random_user_agent(),
     'Accept': 'application/json',
     'Accept-Language': 'en-US,en;q=0.9',
     'Accept-Encoding': 'gzip, deflate, br',
