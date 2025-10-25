@@ -8,10 +8,8 @@ import asyncio
 
 from dataclasses import dataclass
 from getMetadata import get_filtered_data, parse_uri, SpotifyInvalidUrlException
-from qobuzDL import QobuzDownloader
 from tidalDL import TidalDownloader
 from deezerDL import DeezerDownloader
-from amazonDL import LucidaDownloader
 
 @dataclass
 class Config:
@@ -22,7 +20,6 @@ class Config:
     use_track_numbers: bool = False
     use_artist_subfolders: bool = False
     use_album_subfolders: bool = False
-    qobuz_region: str = "us"
     is_album: bool = False
     is_playlist: bool = False
     is_single_track: bool = False
@@ -152,7 +149,7 @@ def download_tracks(indices):
     raw_outpath = config.output_dir
     outpath = os.path.normpath(raw_outpath)
     if not os.path.exists(outpath):
-        print('Warning: Invalid output directory.')
+        print('Warning: Invalid output directory. Please check if the folder exists.')
         return
 
     tracks_to_download = config.tracks if config.is_single_track else [config.tracks[i] for i in indices]
@@ -182,7 +179,6 @@ def start_download_worker(tracks_to_download, outpath):
         config.use_artist_subfolders,
         config.use_album_subfolders,
         config.service,
-        config.qobuz_region
     )
     config.worker.run()
 
@@ -203,22 +199,24 @@ def update_progress(message):
     print(message)
 
 
-def format_seconds(seconds):
-    if seconds < 60:
-        return f"{seconds} seconds"
-    elif seconds < 3600:
-        minutes = seconds // 60
+def format_minutes(minutes):
+    if minutes < 60:
         return f"{minutes} minutes"
+    elif minutes < 1440:  # less than a day
+        hours = minutes // 60
+        mins = minutes % 60
+        return f"{hours} hours {mins} minutes"
     else:
-        hours = seconds // 3600
-        minutes = (seconds % 3600) // 60
-        return f"{hours} hours {minutes} minutes"
+        days = minutes // 1440
+        hours = (minutes % 1440) // 60
+        mins = minutes % 60
+        return f"{days} days {hours} hours {mins} minutes"
 
 
 class DownloadWorker:
     def __init__(self, tracks, outpath, is_single_track=False, is_album=False, is_playlist=False,
                  album_or_playlist_name='', filename_format='title_artist', use_track_numbers=True,
-                 use_artist_subfolders=False, use_album_subfolders=False, service="tidal", qobuz_region="us"):
+                 use_artist_subfolders=False, use_album_subfolders=False, service="tidal"):
         super().__init__()
         self.tracks = tracks
         self.outpath = outpath
@@ -231,7 +229,6 @@ class DownloadWorker:
         self.use_artist_subfolders = use_artist_subfolders
         self.use_album_subfolders = use_album_subfolders
         self.service = service
-        self.qobuz_region = qobuz_region
         self.failed_tracks = []
 
     def get_formatted_filename(self, track):
@@ -245,14 +242,10 @@ class DownloadWorker:
 
     def run(self):
         try:
-            if self.service == "qobuz":
-                downloader = QobuzDownloader(self.qobuz_region)
-            elif self.service == "tidal":
+            if self.service == "tidal":
                 downloader = TidalDownloader()
             elif self.service == "deezer":
                 downloader = DeezerDownloader()
-            elif self.service == "amazon":
-                downloader = LucidaDownloader()
             else:
                 downloader = TidalDownloader()
 
@@ -297,19 +290,6 @@ class DownloadWorker:
                     if os.path.exists(new_filepath) and os.path.getsize(new_filepath) > 0:
                         update_progress(f"File already exists: {new_filename}. Skipping download.")
                         continue
-
-                    if self.service == "qobuz":
-                        if not track.isrc:
-                            update_progress(f"[X] No ISRC found for track: {track.title}. Skipping.")
-                            self.failed_tracks.append((track.title, track.artists, "No ISRC available"))
-                            continue
-
-                        update_progress(f"Getting track from Qobuz with ISRC: {track.isrc}")
-
-                        downloaded_file = downloader.download(
-                            track.isrc,
-                            track_outpath,
-                        )
                     elif self.service == "tidal":
                         if not track.isrc:
                             update_progress(f"[X] No ISRC found for track: {track.title}. Skipping.")
@@ -371,16 +351,6 @@ class DownloadWorker:
                                     raise Exception("[X] Downloaded file not found")
                         else:
                             raise Exception("[X] Deezer download failed")
-                    elif self.service == "amazon":
-                        update_progress(f"Downloading from Amazon Music: {track.title} - {track.artists}")
-
-                        downloaded_file = downloader.download(
-                            track.id,
-                            track_outpath
-                        )
-
-                        if not downloaded_file or not os.path.exists(downloaded_file):
-                            raise Exception("[X] Amazon Music download failed")
                     else:
                         track_id = track.id
                         update_progress(f"Getting track info for ID: {track_id} from {self.service}")
@@ -437,13 +407,12 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("url", help="Spotify URL")
     parser.add_argument("output_dir", help="Output directory")
-    parser.add_argument("--service", choices=["tidal","qobuz","deezer","amazon"], default="tidal")
+    parser.add_argument("--service", choices=["tidal","deezer"], default="tidal")
     parser.add_argument("--filename-format", choices=["title_artist","artist_title","title_only"], default="title_artist")
     parser.add_argument("--use-track-numbers", action="store_true")
     parser.add_argument("--use-artist-subfolders", action="store_true")
     parser.add_argument("--use-album-subfolders", action="store_true")
-    parser.add_argument("--qobuz-region", default="us")
-    parser.add_argument("--loop", type=int, help="Loop delay in seconds")
+    parser.add_argument("--loop", type=int, help="Loop delay in minutes")
     return parser.parse_args()
 
 
@@ -456,9 +425,9 @@ if __name__ == '__main__':
         if config.loop is None:
             download_tracks(range(len(config.tracks)))
         else:
-            print(f"Looping download every {format_seconds(config.loop)}.")
+            print(f"Looping download every {format_minutes(config.loop)}.")
             while True:
                 download_tracks(range(len(config.tracks)))
-                time.sleep(config.loop)
+                time.sleep(config.loop * 60)
     except KeyboardInterrupt:
         print("\nDownload stopped.")

@@ -1,5 +1,6 @@
 from time import sleep
 from urllib.parse import urlparse, parse_qs
+from pathlib import Path
 import requests
 import json
 import time
@@ -13,31 +14,34 @@ from typing import Dict, Any, List, Tuple
 def get_random_user_agent():
     return f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_{randrange(11, 15)}_{randrange(4, 9)}) AppleWebKit/{randrange(530, 537)}.{randrange(30, 37)} (KHTML, like Gecko) Chrome/{randrange(80, 105)}.0.{randrange(3000, 4500)}.{randrange(60, 125)} Safari/{randrange(530, 537)}.{randrange(30, 36)}"
 
-
+# https://github.com/xyloflake/spot-secrets-go
 def generate_totp():
-    url = "https://raw.githubusercontent.com/afkarxyz/secretBytes/refs/heads/main/secrets/secretBytes.json"
+    local_path = Path.home() / ".spotify-secret" / "secretBytes.json"
+    used_local = False
 
     try:
+        url = "https://raw.githubusercontent.com/afkarxyz/secretBytes/refs/heads/main/secrets/secretBytes.json"
         resp = requests.get(url, timeout=10)
         if resp.status_code != 200:
-            raise Exception(f"Failed to fetch TOTP secrets from GitHub. Status: {resp.status_code}")
+            raise Exception(f"GitHub fetch failed with status: {resp.status_code}")
         secrets_list = resp.json()
-        # secrets_list = [
-        #     {"version": 59,
-        #      "secret": [123, 105, 79, 70, 110, 59, 52, 125, 60, 49, 80, 70, 89, 75, 80, 86, 63, 53, 123, 37, 117, 49,
-        #                 52, 93, 77, 62, 47, 86, 48, 104, 68, 72]},
-        #     {"version": 60,
-        #      "secret": [79, 109, 69, 123, 90, 65, 46, 74, 94, 34, 58, 48, 70, 71, 92, 85, 122, 63, 91, 64, 87, 87]},
-        #     {"version": 61,
-        #      "secret": [44, 55, 47, 42, 70, 40, 34, 114, 76, 74, 50, 111, 120, 97, 75, 76, 94, 102, 43, 69, 49, 120,
-        #                 118, 80, 64, 78]},
-        # ]
+    except Exception as github_error:
+        try:
+            if local_path.exists():
+                with open(local_path, 'r') as f:
+                    secrets_list = json.load(f)
+                used_local = True
+            else:
+                raise Exception(f"GitHub failed ({github_error}) and no local file found at {local_path}")
+        except Exception as local_error:
+            raise Exception(f"Failed to fetch secrets from both GitHub and local: {local_error}")
 
+    try:
         latest_entry = max(secrets_list, key=lambda x: x["version"])
         version = latest_entry["version"]
         secret_cipher = latest_entry["secret"]
     except Exception as e:
-        raise Exception(f"Failed to fetch secrets from GitHub: {str(e)}")
+        raise Exception(f"Failed to process secrets: {str(e)}")
 
     processed = [byte ^ ((i % 33) + 9) for i, byte in enumerate(secret_cipher)]
     processed_str = "".join(map(str, processed))
@@ -70,6 +74,8 @@ token_url = 'https://open.spotify.com/api/token'
 playlist_base_url = 'https://api.spotify.com/v1/playlists/{}'
 album_base_url = 'https://api.spotify.com/v1/albums/{}'
 track_base_url = 'https://api.spotify.com/v1/tracks/{}'
+artist_base_url = 'https://api.spotify.com/v1/artists/{}'
+artist_albums_url = 'https://api.spotify.com/v1/artists/{}/albums'
 headers = {
     'User-Agent': get_random_user_agent(),
     'Accept': 'application/json',
@@ -82,7 +88,6 @@ headers = {
     'Referer': 'https://open.spotify.com/',
     'Origin': 'https://open.spotify.com'
 }
-
 
 class SpotifyInvalidUrlException(Exception):
     pass
@@ -113,11 +118,22 @@ def parse_uri(uri):
     if parts[1] == "embed":
         parts = parts[1:]
 
+    if len(parts) > 1 and parts[1].startswith("intl-"):
+        parts = parts[1:]
+
     l = len(parts)
-    if l == 3 and parts[1] in ["album", "track", "playlist"]:
+    if l == 3 and parts[1] in ["album", "track", "playlist", "artist"]:
         return {"type": parts[1], "id": parts[2]}
     if l == 5 and parts[3] == "playlist":
         return {"type": parts[3], "id": parts[4]}
+    if l >= 4 and parts[1] == "artist" and len(parts) >= 4:
+        if parts[3] == "discography":
+            discography_type = "all"
+            if len(parts) >= 5 and parts[4] in ["all", "album", "single", "compilation"]:
+                discography_type = parts[4]
+            return {"type": "artist_discography", "id": parts[2], "discography_type": discography_type}
+        else:
+            return {"type": "artist", "id": parts[2]}
 
     raise SpotifyInvalidUrlException("ERROR: unable to determine Spotify URL type or type is unsupported.")
 
