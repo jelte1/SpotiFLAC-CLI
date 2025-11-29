@@ -1,7 +1,5 @@
-import sys
 import os
 import re
-import threading
 import time
 import argparse
 import asyncio
@@ -15,7 +13,7 @@ from deezerDL import DeezerDownloader
 class Config:
     url: str
     output_dir: str
-    service: str = "tidal"
+    service: list = None
     filename_format: str = "title_artist"
     use_track_numbers: bool = False
     use_artist_subfolders: bool = False
@@ -27,6 +25,8 @@ class Config:
     tracks = []
     worker = None
     loop: int = 3600
+    start_time: float = 0.0
+    end_time: float = 0.0
 
 @dataclass
 class Track:
@@ -38,6 +38,7 @@ class Track:
     duration_ms: int
     id: str
     isrc: str = ""
+    downloaded : bool = False
 
 def get_metadata(url):
     try:
@@ -86,6 +87,9 @@ def on_metadata_fetched(metadata):
 def handle_track_metadata(track_data):
     track_id = track_data["external_urls"].split("/")[-1]
 
+    if any(t.id == track_id for t in config.tracks):
+        return
+
     track = Track(
         external_urls=track_data["external_urls"],
         title=track_data["name"],
@@ -109,6 +113,9 @@ def handle_album_metadata(album_data):
     for track in album_data["track_list"]:
         track_id = track["external_urls"].split("/")[-1]
 
+        if any(t.id == track_id for t in config.tracks):
+            continue
+
         config.tracks.append(Track(
             external_urls=track["external_urls"],
             title=track["name"],
@@ -129,6 +136,9 @@ def handle_playlist_metadata(playlist_data):
 
     for track in playlist_data["track_list"]:
         track_id = track["external_urls"].split("/")[-1]
+
+        if any(t.id == track_id for t in config.tracks):
+            continue
 
         config.tracks.append(Track(
             external_urls=track["external_urls"],
@@ -183,8 +193,9 @@ def start_download_worker(tracks_to_download, outpath):
     config.worker.run()
 
 
-def on_download_finished(success, message, failed_tracks):
+def on_download_finished(success, message, failed_tracks, total_elapsed=None):
     if success:
+        print(f"\n=======================================")
         print(f"\nStatus: {message}")
         if failed_tracks:
             print("\nFailed downloads:")
@@ -194,6 +205,16 @@ def on_download_finished(success, message, failed_tracks):
     else:
         print(f"Error: {message}")
 
+    if total_elapsed is not None:
+        print(f"\nElapsed time for this download loop: {format_seconds(total_elapsed)}")
+
+    if config.loop is not None:
+        print(f"\nDownload starting again in: {format_minutes(config.loop)}")
+        print(f"\n=======================================")
+        time.sleep(config.loop * 60)
+        fetch_tracks(config.url)
+        download_tracks(range(len(config.tracks)))
+
 
 def update_progress(message):
     print(message)
@@ -202,7 +223,7 @@ def update_progress(message):
 def format_minutes(minutes):
     if minutes < 60:
         return f"{minutes} minutes"
-    elif minutes < 1440:  # less than a day
+    elif minutes < 1440:
         hours = minutes // 60
         mins = minutes % 60
         return f"{hours} hours {mins} minutes"
@@ -212,11 +233,30 @@ def format_minutes(minutes):
         mins = minutes % 60
         return f"{days} days {hours} hours {mins} minutes"
 
+def format_seconds(seconds: float) -> str:
+    seconds = int(round(seconds))
+
+    days, rem = divmod(seconds, 86400)
+    hrs, rem = divmod(rem, 3600)
+    mins, secs = divmod(rem, 60)
+
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hrs:
+        parts.append(f"{hrs}h")
+    if mins:
+        parts.append(f"{mins}m")
+    if secs or not parts:
+        parts.append(f"{secs}s")
+
+    return " ".join(parts)
+
 
 class DownloadWorker:
     def __init__(self, tracks, outpath, is_single_track=False, is_album=False, is_playlist=False,
                  album_or_playlist_name='', filename_format='title_artist', use_track_numbers=True,
-                 use_artist_subfolders=False, use_album_subfolders=False, service="tidal"):
+                 use_artist_subfolders=False, use_album_subfolders=False, services=["tidal"]):
         super().__init__()
         self.tracks = tracks
         self.outpath = outpath
@@ -228,7 +268,7 @@ class DownloadWorker:
         self.use_track_numbers = use_track_numbers
         self.use_artist_subfolders = use_artist_subfolders
         self.use_album_subfolders = use_album_subfolders
-        self.service = service
+        self.services = services
         self.failed_tracks = []
 
     def get_formatted_filename(self, track):
@@ -242,172 +282,178 @@ class DownloadWorker:
 
     def run(self):
         try:
-            if self.service == "tidal":
-                downloader = TidalDownloader()
-            elif self.service == "deezer":
-                downloader = DeezerDownloader()
-            else:
-                downloader = TidalDownloader()
+
+            total_tracks = len(self.tracks)
+
+            start = time.perf_counter()
 
             def progress_update(current, total):
                 if total <= 0:
                     update_progress("Processing metadata...")
 
-            downloader.set_progress_callback(progress_update)
-
-            total_tracks = len(self.tracks)
-
             for i, track in enumerate(self.tracks):
-                update_progress(f"[{i + 1}/{total_tracks}] Starting download: {track.title} - {track.artists}")
 
-                try:
-                    if self.is_playlist:
-                        track_outpath = self.outpath
-
-                        if self.use_artist_subfolders:
-                            artist_name = track.artists.split(', ')[0] if ', ' in track.artists else track.artists
-                            artist_folder = re.sub(r'[<>:"/\\|?*]', lambda m: "'" if m.group() == '"' else '_',
-                                                   artist_name)
-                            track_outpath = os.path.join(track_outpath, artist_folder)
-
-                        if self.use_album_subfolders:
-                            album_folder = re.sub(r'[<>:"/\\|?*]', lambda m: "'" if m.group() == '"' else '_',
-                                                  track.album)
-                            track_outpath = os.path.join(track_outpath, album_folder)
-
-                        os.makedirs(track_outpath, exist_ok=True)
-                    else:
-                        track_outpath = self.outpath
-
-                    if (self.is_album or self.is_playlist) and self.use_track_numbers:
-                        new_filename = f"{track.track_number:02d} - {self.get_formatted_filename(track)}"
-                    else:
-                        new_filename = self.get_formatted_filename(track)
-
-                    new_filename = re.sub(r'[<>:"/\\|?*]', lambda m: "'" if m.group() == '"' else '_', new_filename)
-                    new_filepath = os.path.join(track_outpath, new_filename)
-
-                    if os.path.exists(new_filepath) and os.path.getsize(new_filepath) > 0:
-                        update_progress(f"File already exists: {new_filename}. Skipping download.")
-                        continue
-                    elif self.service == "tidal":
-                        if not track.isrc:
-                            update_progress(f"[X] No ISRC found for track: {track.title}. Skipping.")
-                            self.failed_tracks.append((track.title, track.artists, "No ISRC available"))
-                            continue
-
-                        update_progress(f"Searching and downloading from Tidal for ISRC: {track.isrc} - {track.title} - {track.artists}")
-
-                        download_result_details = downloader.download(
-                            query=f"{track.title} {track.artists}",
-                            isrc=track.isrc,
-                            output_dir=track_outpath,
-                            quality="LOSSLESS"
-                        )
-
-                        if isinstance(download_result_details, str) and os.path.exists(download_result_details):
-                            downloaded_file = download_result_details
-                        elif isinstance(download_result_details, dict) and download_result_details.get(
-                                "success") == False and download_result_details.get(
-                            "error") == "Download stopped by user":
-                            update_progress(f"Download stopped by user for: {track.title}")
-                            return
-                        elif isinstance(download_result_details, dict) and download_result_details.get(
-                                "success") == False:
-                            raise Exception(download_result_details.get("error", "Tidal download failed"))
-                        elif isinstance(download_result_details, dict) and (
-                                download_result_details.get(
-                                    "status") == "all_skipped" or download_result_details.get(
-                            "status") == "skipped_exists"):
-                            update_progress(f"File already exists or skipped: {new_filename}")
-                            downloaded_file = new_filepath
-                        else:
-                            raise Exception(
-                                f"Tidal download failed or returned unexpected result: {download_result_details}")
-                    elif self.service == "deezer":
-                        if not track.isrc:
-                            update_progress(f"[X] No ISRC found for track: {track.title}. Skipping.")
-                            self.failed_tracks.append((track.title, track.artists, "No ISRC available"))
-                            continue
-
-                        update_progress(f"Downloading from Deezer with ISRC: {track.isrc}")
-
-                        success = asyncio.run(downloader.download_by_isrc(track.isrc, track_outpath))
-
-                        if success:
-                            safe_title = "".join(
-                                c for c in track.title if c.isalnum() or c in (' ', '-', '_')).rstrip()
-                            safe_artist = "".join(
-                                c for c in track.artists if c.isalnum() or c in (' ', '-', '_')).rstrip()
-                            expected_filename = f"{safe_artist} - {safe_title}.flac"
-                            downloaded_file = os.path.join(track_outpath, expected_filename)
-
-                            if not os.path.exists(downloaded_file):
-                                import glob
-                                flac_files = glob.glob(os.path.join(track_outpath, "*.flac"))
-                                if flac_files:
-                                    downloaded_file = max(flac_files, key=os.path.getctime)
-                                else:
-                                    raise Exception("[X] Downloaded file not found")
-                        else:
-                            raise Exception("[X] Deezer download failed")
-                    else:
-                        track_id = track.id
-                        update_progress(f"Getting track info for ID: {track_id} from {self.service}")
-
-                        try:
-                            loop = asyncio.get_event_loop()
-                            if loop.is_closed():
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                        except RuntimeError:
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-
-                        metadata = loop.run_until_complete(downloader.get_track_info(track_id, self.service))
-                        update_progress(f"Track info received, starting download process")
-
-
-                        downloaded_file = downloader.download(
-                            metadata,
-                            track_outpath
-                        )
-
-                    if downloaded_file and os.path.exists(downloaded_file):
-                        if downloaded_file == new_filepath:
-                            update_progress(f"File already exists: {new_filename}")
-                            continue
-
-                        if downloaded_file != new_filepath:
-                            try:
-                                os.rename(downloaded_file, new_filepath)
-                                update_progress(f"File renamed to: {new_filename}")
-                            except OSError as e:
-                                update_progress( f"[X] Warning: Could not rename file {downloaded_file} to {new_filepath}: {str(e)}")
-                                pass
-                    else:
-                        raise Exception(f"[X] Download failed or file not found: {downloaded_file}")
-
-                    update_progress(f"Successfully downloaded: {track.title} - {track.artists}")
-                except Exception as e:
-                    self.failed_tracks.append((track.title, track.artists, str(e)))
-                    update_progress(f"[X] Failed to download: {track.title} - {track.artists}\nError: {str(e)}")
+                if track.downloaded:
                     continue
 
-            success_message = "Download completed!"
+                update_progress(f"[{i + 1}/{total_tracks}] Starting download: {track.title} - {track.artists}")
+
+                if self.is_playlist:
+                    track_outpath = self.outpath
+
+                    if self.use_artist_subfolders:
+                        artist_name = track.artists.split(", ")[0] if ", " in track.artists else track.artists
+                        artist_folder = re.sub(r'[<>:"/\\|?*]', lambda m: "'" if m.group() == "\"" else "_",
+                                               artist_name)
+                        track_outpath = os.path.join(track_outpath, artist_folder)
+
+                    if self.use_album_subfolders:
+                        album_folder = re.sub(r'[<>:"/\\|?*]', lambda m: "'" if m.group() == "\"" else "_", track.album)
+                        track_outpath = os.path.join(track_outpath, album_folder)
+
+                    os.makedirs(track_outpath, exist_ok=True)
+
+                else:
+                    track_outpath = self.outpath
+
+                if (self.is_album or self.is_playlist) and self.use_track_numbers:
+                    new_filename = f"{track.track_number:02d} - {self.get_formatted_filename(track)}"
+                else:
+                    new_filename = self.get_formatted_filename(track)
+
+                new_filename = re.sub(r'[<>:"/\\|?*]', lambda m: "'" if m.group() == "\"" else "_", new_filename)
+                new_filepath = os.path.join(track_outpath, new_filename)
+
+                if os.path.exists(new_filepath) and os.path.getsize(new_filepath) > 0:
+                    update_progress(f"File already exists: {new_filename}. Skipping download.")
+                    track.downloaded = True
+                    continue
+
+                download_success = False
+                last_error = None
+
+                for svc in self.services:
+                    update_progress(f"Trying service: {svc}")
+
+                    if svc == "tidal":
+                        downloader = TidalDownloader()
+                    elif svc == "deezer":
+                        downloader = DeezerDownloader()
+                    else:
+                        downloader = TidalDownloader()
+
+                    downloader.set_progress_callback(progress_update)
+
+                    try:
+                        if not track.isrc:
+                            raise Exception("No ISRC available")
+
+                        if svc == "tidal":
+                            update_progress(
+                                f"Searching and downloading from Tidal for ISRC: {track.isrc} - {track.title} - {track.artists}"
+                            )
+
+                            result = downloader.download(
+                                query=f"{track.title} {track.artists}",
+                                isrc=track.isrc,
+                                output_dir=track_outpath,
+                                quality="LOSSLESS",
+                            )
+
+                            if isinstance(result, str) and os.path.exists(result):
+                                downloaded_file = result
+
+                            elif isinstance(result, dict) and result.get("success") == False:
+                                if result.get("error") == "Download stopped by user":
+                                    update_progress(f"Download stopped by user for: {track.title}")
+                                    return
+                                raise Exception(result.get("error", "Tidal download failed"))
+
+                            elif isinstance(result, dict) and result.get("status") in ("all_skipped", "skipped_exists"):
+                                downloaded_file = new_filepath
+
+                            else:
+                                raise Exception(f"Unexpected Tidal result: {result}")
+
+                        elif svc == "deezer":
+                            update_progress(f"Downloading from Deezer with ISRC: {track.isrc}")
+
+                            ok = asyncio.run(downloader.download_by_isrc(track.isrc, track_outpath))
+
+                            if not ok:
+                                raise Exception("Deezer download failed")
+
+                            import glob
+                            flac_files = glob.glob(os.path.join(track_outpath, "*.flac"))
+                            if not flac_files:
+                                raise Exception("No FLAC file found after Deezer download")
+
+                            downloaded_file = max(flac_files, key=os.path.getctime)
+
+                        else:
+                            track_id = track.id
+                            update_progress(f"Getting track info for ID: {track_id} from {svc}")
+
+                            try:
+                                loop = asyncio.get_event_loop()
+                                if loop.is_closed():
+                                    loop = asyncio.new_event_loop()
+                                    asyncio.set_event_loop(loop)
+                            except RuntimeError:
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+
+                            metadata = loop.run_until_complete(
+                                downloader.get_track_info(track_id, svc)
+                            )
+
+                            downloaded_file = downloader.download(metadata, track_outpath)
+
+                        if downloaded_file and os.path.exists(downloaded_file):
+                            if downloaded_file != new_filepath:
+                                try:
+                                    os.rename(downloaded_file, new_filepath)
+                                    update_progress(f"File renamed to: {new_filename}")
+                                except OSError as e:
+                                    update_progress(
+                                        f"[X] Warning: Could not rename file {downloaded_file} → {new_filepath}: {e}"
+                                    )
+                            update_progress(f"Successfully downloaded using: {svc}")
+                            track.downloaded = True
+                            download_success = True
+                            break
+
+                        else:
+                            raise Exception("Downloaded file missing or invalid")
+
+                    except Exception as e:
+                        last_error = str(e)
+                        update_progress(f"[X] {svc} failed: {e}")
+                        continue
+
+                if not download_success:
+                    self.failed_tracks.append((track.title, track.artists, last_error))
+                    update_progress(f"[X] Failed all services for: {track.title}")
+                    continue
+
+            total_elapsed = time.perf_counter() - start
+
+            msg = "Download completed!"
             if self.failed_tracks:
-                success_message += f"\n\nFailed downloads: {len(self.failed_tracks)} tracks"
-            on_download_finished(True, success_message, self.failed_tracks)
+                msg += f"\n\nFailed downloads: {len(self.failed_tracks)}"
+
+            on_download_finished(True, msg, self.failed_tracks, total_elapsed)
 
         except Exception as e:
-            on_download_finished(False, str(e), self.failed_tracks)
+            total_elapsed = time.perf_counter() - start
+            on_download_finished(False, str(e), self.failed_tracks, total_elapsed)
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("url", help="Spotify URL")
     parser.add_argument("output_dir", help="Output directory")
-    parser.add_argument("--service", choices=["tidal","deezer"], default="tidal")
+    parser.add_argument("--service", choices=["tidal", "deezer"], nargs="+", default=["tidal"], help="One or more services to try in order (e.g. --service tidal deezer)")
     parser.add_argument("--filename-format", choices=["title_artist","artist_title","title_only"], default="title_artist")
     parser.add_argument("--use-track-numbers", action="store_true")
     parser.add_argument("--use-artist-subfolders", action="store_true")
@@ -422,12 +468,7 @@ if __name__ == '__main__':
 
     try:
         fetch_tracks(config.url)
-        if config.loop is None:
-            download_tracks(range(len(config.tracks)))
-        else:
-            print(f"Looping download every {format_minutes(config.loop)}.")
-            while True:
-                download_tracks(range(len(config.tracks)))
-                time.sleep(config.loop * 60)
+        download_tracks(range(len(config.tracks)))
+
     except KeyboardInterrupt:
         print("\nDownload stopped.")

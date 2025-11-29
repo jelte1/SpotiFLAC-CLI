@@ -1,8 +1,7 @@
 import requests
 import asyncio
-import os
-import sys
 from mutagen.flac import FLAC
+import os
 
 class DeezerDownloader:
     def __init__(self):
